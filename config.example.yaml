@@ -1,0 +1,17 @@
+listener:
+  address: 127.0.0.1:8080
+  allowed_origins: []
+audit:
+  path: ./conduit-audit.jsonl
+policy:
+  allow: []
+  deny: []
+limits:
+  max_pages_per_downstream: 32
+  max_tools_per_downstream: 256
+  max_downstream_catalog_bytes: 1048576
+  request_timeout: 10s
+downstreams:
+  - id: example
+    url: http://127.0.0.1:9000/mcp
+    headers: {}

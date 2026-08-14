@@ -1,0 +1,69 @@
+package health
+
+import (
+	"sort"
+	"sync"
+	"time"
+)
+
+type Downstream struct {
+	ID          string     `json:"id"`
+	State       string     `json:"state"`
+	ToolCount   int        `json:"tool_count"`
+	LastSuccess *time.Time `json:"last_success,omitempty"`
+	Error       string     `json:"error,omitempty"`
+}
+type Status struct {
+	Live         bool         `json:"live"`
+	Ready        bool         `json:"ready"`
+	AuditHealthy bool         `json:"audit_healthy"`
+	Downstreams  []Downstream `json:"downstreams"`
+}
+type State struct {
+	mu          sync.RWMutex
+	live, audit bool
+	servers     map[string]Downstream
+	attempted   map[string]bool
+}
+
+func New(ids []string) *State {
+	s := &State{audit: true, servers: map[string]Downstream{}, attempted: map[string]bool{}}
+	for _, id := range ids {
+		s.servers[id] = Downstream{ID: id, State: "starting"}
+	}
+	return s
+}
+func (s *State) SetAudit(ok bool) { s.mu.Lock(); defer s.mu.Unlock(); s.audit = ok }
+func (s *State) SetLive(ok bool)  { s.mu.Lock(); defer s.mu.Unlock(); s.live = ok }
+func (s *State) SetServer(id, state string, n int, err string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	d := s.servers[id]
+	s.attempted[id] = true
+	d.State = state
+	d.ToolCount = n
+	d.Error = err
+	if state == "healthy" {
+		now := time.Now().UTC()
+		d.LastSuccess = &now
+	}
+	s.servers[id] = d
+}
+func (s *State) Snapshot() Status {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := Status{Live: s.live, AuditHealthy: s.audit}
+	initialComplete := true
+	for _, d := range s.servers {
+		out.Downstreams = append(out.Downstreams, d)
+		if !s.attempted[d.ID] {
+			initialComplete = false
+		}
+		if d.State == "healthy" {
+			out.Ready = true
+		}
+	}
+	sort.Slice(out.Downstreams, func(i, j int) bool { return out.Downstreams[i].ID < out.Downstreams[j].ID })
+	out.Ready = out.Ready && out.Live && initialComplete && out.AuditHealthy
+	return out
+}
