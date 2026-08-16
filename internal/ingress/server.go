@@ -11,6 +11,7 @@ import (
 
 	"github.com/conduit-mcp/conduit/internal/config"
 	"github.com/conduit-mcp/conduit/internal/health"
+	"github.com/conduit-mcp/conduit/internal/registry"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -21,7 +22,7 @@ type Server struct {
 	health  *health.State
 }
 
-func New(cfg config.Config, state *health.State, buildVersion string) *Server {
+func New(cfg config.Config, state *health.State, catalogRegistry *registry.Registry, buildVersion string) *Server {
 	caps := &mcp.ServerCapabilities{Tools: &mcp.ToolCapabilities{}}
 	mcpServer := mcp.NewServer(&mcp.Implementation{Name: "conduit", Version: buildVersion}, &mcp.ServerOptions{Capabilities: caps})
 	sdk := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return mcpServer }, &mcp.StreamableHTTPOptions{Stateless: true, JSONResponse: true, MaxRequestBodyBytes: 1 << 20, PropagateRequestCancellation: true})
@@ -47,10 +48,6 @@ func New(cfg config.Config, state *health.State, buildVersion string) *Server {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		if !state.Snapshot().Ready {
-			http.Error(w, "conduit not ready", http.StatusServiceUnavailable)
-			return
-		}
 		request, err := validate2026(r)
 		if err != nil {
 			http.Error(w, "invalid MCP request", http.StatusBadRequest)
@@ -64,7 +61,19 @@ func New(cfg config.Config, state *health.State, buildVersion string) *Server {
 			return
 		}
 		if request.Method == "server/discover" {
+			if !state.Snapshot().Ready {
+				http.Error(w, "conduit not ready", http.StatusServiceUnavailable)
+				return
+			}
 			serveStrictDiscover(w, r, sdk)
+			return
+		}
+		if request.Method == "tools/list" {
+			serveToolsList(w, r, request, sdk, state, catalogRegistry)
+			return
+		}
+		if !state.Snapshot().Ready {
+			http.Error(w, "conduit not ready", http.StatusServiceUnavailable)
 			return
 		}
 		sdk.ServeHTTP(w, r)
@@ -92,6 +101,7 @@ func allowedOrigin(origin string, allowed []string) bool {
 type requestInfo struct {
 	ID     json.RawMessage
 	Method string
+	Cursor string
 }
 
 func validate2026(r *http.Request) (requestInfo, error) {
@@ -106,7 +116,8 @@ func validate2026(r *http.Request) (requestInfo, error) {
 		ID      json.RawMessage `json:"id"`
 		Method  string          `json:"method"`
 		Params  struct {
-			Meta map[string]any `json:"_meta"`
+			Meta   map[string]any `json:"_meta"`
+			Cursor string         `json:"cursor"`
 		} `json:"params"`
 	}
 	if json.Unmarshal(b, &v) != nil || v.JSONRPC != "2.0" || len(v.ID) == 0 || v.Method == "" {
@@ -129,7 +140,62 @@ func validate2026(r *http.Request) (requestInfo, error) {
 	if _, ok := meta["io.modelcontextprotocol/clientCapabilities"]; !ok {
 		return requestInfo{}, errInvalid
 	}
-	return requestInfo{ID: v.ID, Method: v.Method}, nil
+	return requestInfo{ID: v.ID, Method: v.Method, Cursor: v.Params.Cursor}, nil
+}
+
+func serveToolsList(w http.ResponseWriter, r *http.Request, request requestInfo, sdk http.Handler, state *health.State, catalogs *registry.Registry) {
+	if !sdkValidatesToolsList(w, r, sdk) {
+		return
+	}
+	if request.Cursor != "" {
+		writeRPCError(w, http.StatusOK, request.ID, -32602, "conduit does not support tools/list pagination")
+		return
+	}
+	if catalogs == nil {
+		http.Error(w, "conduit not ready", http.StatusServiceUnavailable)
+		return
+	}
+	snapshot := catalogs.Snapshot()
+	if snapshot.State == registry.StateOverLimit {
+		writeRPCError(w, http.StatusOK, request.ID, -32603, "conduit catalog limit exceeded")
+		return
+	}
+	if snapshot.State != registry.StateReady {
+		if snapshot.State == registry.StateCollision {
+			writeRPCError(w, http.StatusOK, request.ID, -32603, "conduit catalog unavailable")
+			return
+		}
+		http.Error(w, "conduit not ready", http.StatusServiceUnavailable)
+		return
+	}
+	if !state.Snapshot().Ready {
+		http.Error(w, "conduit not ready", http.StatusServiceUnavailable)
+		return
+	}
+	writeRPCResult(w, request.ID, snapshot.ResultJSON())
+}
+
+// sdkValidatesToolsList keeps Streamable HTTP transport, MCP header, and
+// typed request validation in the official SDK. The recorder's empty local
+// tools/list result is discarded: Conduit's registry owns the actual result.
+func sdkValidatesToolsList(w http.ResponseWriter, r *http.Request, sdk http.Handler) bool {
+	body, err := ioRead(r, 1<<20)
+	if err != nil {
+		http.Error(w, "invalid MCP request", http.StatusBadRequest)
+		return false
+	}
+	r.Body = io.NopCloser(bytes.NewReader(body))
+	probe := r.Clone(r.Context())
+	probe.Header = r.Header.Clone()
+	probe.Body = io.NopCloser(bytes.NewReader(body))
+	probe.ContentLength = int64(len(body))
+	recorder := httptest.NewRecorder()
+	sdk.ServeHTTP(recorder, probe)
+	if recorder.Code == http.StatusOK {
+		return true
+	}
+	copyRecordedResponse(w, recorder)
+	return false
 }
 
 // validRequestID preserves the request ID token for a manual JSON-RPC error.
@@ -165,6 +231,30 @@ func writeMethodNotFound(w http.ResponseWriter, id json.RawMessage) {
 		Code    int    `json:"code"`
 		Message string `json:"message"`
 	}{Code: -32601, Message: "method not found"}})
+}
+
+func writeRPCResult(w http.ResponseWriter, id json.RawMessage, result json.RawMessage) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":`))
+	_, _ = w.Write(id)
+	_, _ = w.Write([]byte(`,"result":`))
+	_, _ = w.Write(result)
+	_, _ = w.Write([]byte("}\n"))
+}
+
+func writeRPCError(w http.ResponseWriter, status int, id json.RawMessage, code int, message string) {
+	writeJSON(w, status, struct {
+		JSONRPC string          `json:"jsonrpc"`
+		ID      json.RawMessage `json:"id"`
+		Error   struct {
+			Code    int    `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}{JSONRPC: "2.0", ID: id, Error: struct {
+		Code    int    `json:"code"`
+		Message string `json:"message"`
+	}{Code: code, Message: message}})
 }
 
 var transportProbeBody = []byte(`{"jsonrpc":"2.0","id":"conduit-transport-probe","method":"conduit/transport-probe","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}`)

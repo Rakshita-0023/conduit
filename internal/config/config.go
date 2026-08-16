@@ -36,6 +36,9 @@ type Limits struct {
 	MaxPagesPerDownstream     int           `yaml:"max_pages_per_downstream"`
 	MaxToolsPerDownstream     int           `yaml:"max_tools_per_downstream"`
 	MaxDownstreamCatalogBytes int64         `yaml:"max_downstream_catalog_bytes"`
+	MaxAggregateTools         int           `yaml:"max_aggregate_tools"`
+	MaxAggregateResponseBytes int64         `yaml:"max_aggregate_response_bytes"`
+	CatalogRefreshInterval    time.Duration `yaml:"catalog_refresh_interval"`
 	RequestTimeout            time.Duration `yaml:"request_timeout"`
 }
 type Downstream struct {
@@ -82,8 +85,11 @@ func (c *Config) Validate() error {
 	if c.Audit.Path == "" || filepath.Clean(c.Audit.Path) == "." {
 		return fmt.Errorf("audit.path is required")
 	}
-	if c.Limits.MaxPagesPerDownstream <= 0 || c.Limits.MaxToolsPerDownstream <= 0 || c.Limits.MaxDownstreamCatalogBytes <= 0 {
+	if c.Limits.MaxPagesPerDownstream <= 0 || c.Limits.MaxToolsPerDownstream <= 0 || c.Limits.MaxDownstreamCatalogBytes <= 0 || c.Limits.MaxAggregateTools <= 0 || c.Limits.MaxAggregateResponseBytes <= 0 {
 		return fmt.Errorf("catalog limits must be positive")
+	}
+	if c.Limits.CatalogRefreshInterval <= 0 {
+		return fmt.Errorf("catalog_refresh_interval must be positive")
 	}
 	if c.Limits.RequestTimeout < 0 {
 		return fmt.Errorf("request_timeout must not be negative")

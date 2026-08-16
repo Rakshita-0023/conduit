@@ -5,19 +5,55 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	"github.com/conduit-mcp/conduit/internal/config"
 	"github.com/conduit-mcp/conduit/internal/health"
+	"github.com/conduit-mcp/conduit/internal/policy"
+	"github.com/conduit-mcp/conduit/internal/registry"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 func readyState() *health.State {
 	s := health.New([]string{"x"})
 	s.SetLive(true)
+	s.SetAggregate(1, "ready", 0)
 	s.SetServer("x", "healthy", 0, "")
 	return s
+}
+
+func federatedRegistry(t *testing.T, limits config.Limits, tools ...registry.Catalog) *registry.Registry {
+	t.Helper()
+	compiled, err := policy.Compile(config.Policy{Allow: []string{"github.*", "postgres.*", "x.*"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := registry.New(limits, compiled, mcp.Implementation{Name: "conduit", Version: "test"})
+	for _, catalog := range tools {
+		if _, err := r.Publish(catalog); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return r
+}
+
+func aggregateReadyState(snapshot *registry.Snapshot) *health.State {
+	s := health.New([]string{"x"})
+	s.SetLive(true)
+	s.SetAggregate(snapshot.Generation, string(snapshot.State), snapshot.ToolCount)
+	s.SetServer("x", "healthy", 1, "")
+	return s
+}
+
+func aggregateLimits() config.Limits {
+	return config.Limits{MaxAggregateTools: 8, MaxAggregateResponseBytes: 1 << 20}
+}
+
+func inactiveRegistry(t *testing.T) *registry.Registry {
+	return federatedRegistry(t, aggregateLimits())
 }
 
 func request(method, version string) *http.Request {
@@ -43,7 +79,7 @@ func requestWithRawID(method, id string) *http.Request {
 
 func TestDiscoverAndProtocolAdmission(t *testing.T) {
 	cfg := config.Config{Listener: config.Listener{Address: "127.0.0.1:0"}}
-	s := New(cfg, readyState(), "test")
+	s := New(cfg, readyState(), inactiveRegistry(t), "test")
 	cases := []struct {
 		name   string
 		r      *http.Request
@@ -91,7 +127,7 @@ func TestDiscoverAndProtocolAdmission(t *testing.T) {
 }
 
 func TestDiscoverAdvertisesExactProfile(t *testing.T) {
-	s := New(config.Config{Listener: config.Listener{Address: "127.0.0.1:0"}}, readyState(), "test")
+	s := New(config.Config{Listener: config.Listener{Address: "127.0.0.1:0"}}, readyState(), inactiveRegistry(t), "test")
 	w := httptest.NewRecorder()
 	s.Handler().ServeHTTP(w, request("server/discover", Version))
 	if w.Code != http.StatusOK {
@@ -119,7 +155,7 @@ func TestDiscoverAdvertisesExactProfile(t *testing.T) {
 }
 
 func TestSDKContentNegotiation(t *testing.T) {
-	s := New(config.Config{Listener: config.Listener{Address: "127.0.0.1:0"}}, readyState(), "test")
+	s := New(config.Config{Listener: config.Listener{Address: "127.0.0.1:0"}}, readyState(), inactiveRegistry(t), "test")
 	for name, mutate := range map[string]func(*http.Request){
 		"accept":       func(r *http.Request) { r.Header.Set("Accept", "application/json") },
 		"content-type": func(r *http.Request) { r.Header.Set("Content-Type", "text/plain") },
@@ -137,7 +173,7 @@ func TestSDKContentNegotiation(t *testing.T) {
 }
 
 func TestUnsupportedMethodStillRequiresValidTransport(t *testing.T) {
-	s := New(config.Config{Listener: config.Listener{Address: "127.0.0.1:0"}}, readyState(), "test")
+	s := New(config.Config{Listener: config.Listener{Address: "127.0.0.1:0"}}, readyState(), inactiveRegistry(t), "test")
 	for name, tc := range map[string]struct {
 		mutate     func(*http.Request)
 		status     int
@@ -163,7 +199,7 @@ func TestUnsupportedMethodStillRequiresValidTransport(t *testing.T) {
 }
 
 func TestUnsupportedMethodPreservesValidRequestIDs(t *testing.T) {
-	s := New(config.Config{Listener: config.Listener{Address: "127.0.0.1:0"}}, readyState(), "test")
+	s := New(config.Config{Listener: config.Listener{Address: "127.0.0.1:0"}}, readyState(), inactiveRegistry(t), "test")
 	for name, id := range map[string]string{
 		"string": "\"exact-id\"",
 		"number": "42",
@@ -189,7 +225,7 @@ func TestUnsupportedMethodPreservesValidRequestIDs(t *testing.T) {
 }
 
 func TestUnsupportedMethodRejectsInvalidRequestIDs(t *testing.T) {
-	s := New(config.Config{Listener: config.Listener{Address: "127.0.0.1:0"}}, readyState(), "test")
+	s := New(config.Config{Listener: config.Listener{Address: "127.0.0.1:0"}}, readyState(), inactiveRegistry(t), "test")
 	for name, id := range map[string]string{"object": `{}`, "array": `[]`} {
 		t.Run(name, func(t *testing.T) {
 			w := httptest.NewRecorder()
@@ -207,7 +243,7 @@ func TestUnsupportedMethodRejectsInvalidRequestIDs(t *testing.T) {
 }
 
 func TestUnsupportedMethodNullIDMatchesSDKNotificationBehavior(t *testing.T) {
-	s := New(config.Config{Listener: config.Listener{Address: "127.0.0.1:0"}}, readyState(), "test")
+	s := New(config.Config{Listener: config.Listener{Address: "127.0.0.1:0"}}, readyState(), inactiveRegistry(t), "test")
 	w := httptest.NewRecorder()
 	s.Handler().ServeHTTP(w, requestWithRawID("prompts/list", "null"))
 	if w.Code != http.StatusBadRequest || bytes.Contains(w.Body.Bytes(), []byte("-32601")) {
@@ -217,7 +253,7 @@ func TestUnsupportedMethodNullIDMatchesSDKNotificationBehavior(t *testing.T) {
 
 func TestOriginPolicy(t *testing.T) {
 	cfg := config.Config{Listener: config.Listener{Address: "127.0.0.1:0", AllowedOrigins: []string{"http://localhost:3000"}}}
-	s := New(cfg, readyState(), "test")
+	s := New(cfg, readyState(), inactiveRegistry(t), "test")
 	cases := map[string]struct {
 		origin string
 		want   int
@@ -236,7 +272,7 @@ func TestOriginPolicy(t *testing.T) {
 }
 
 func TestHealthAndNotReady(t *testing.T) {
-	s := New(config.Config{Listener: config.Listener{Address: "127.0.0.1:0"}}, health.New([]string{"x"}), "test")
+	s := New(config.Config{Listener: config.Listener{Address: "127.0.0.1:0"}}, health.New([]string{"x"}), inactiveRegistry(t), "test")
 	w := httptest.NewRecorder()
 	s.Handler().ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/healthz", nil))
 	if w.Code != 200 || !bytes.Contains(w.Body.Bytes(), []byte("\"ready\":false")) {
@@ -250,7 +286,7 @@ func TestHealthAndNotReady(t *testing.T) {
 }
 
 func TestSDKValidatesToolNameHeaderBeforeUnknownTool(t *testing.T) {
-	s := New(config.Config{Listener: config.Listener{Address: "127.0.0.1:0"}}, readyState(), "test")
+	s := New(config.Config{Listener: config.Listener{Address: "127.0.0.1:0"}}, readyState(), inactiveRegistry(t), "test")
 	r := request("tools/call", Version)
 	var body map[string]any
 	_ = json.NewDecoder(r.Body).Decode(&body)
@@ -263,4 +299,86 @@ func TestSDKValidatesToolNameHeaderBeforeUnknownTool(t *testing.T) {
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("got %d: %s", w.Code, w.Body.String())
 	}
+}
+
+func TestFederatedToolsListUsesPublishedResultBytes(t *testing.T) {
+	githubTool := &mcp.Tool{Name: "search", Description: "find code", InputSchema: map[string]any{"type": "object"}, OutputSchema: map[string]any{"type": "object"}, Meta: map[string]any{"source": "github"}}
+	postgresTool := &mcp.Tool{Name: "query", Description: "run query", InputSchema: map[string]any{"type": "object"}}
+	r := federatedRegistry(t, aggregateLimits(), registry.Catalog{ServerID: "postgres", Tools: []*mcp.Tool{postgresTool}}, registry.Catalog{ServerID: "github", Tools: []*mcp.Tool{githubTool}})
+	snapshot := r.Snapshot()
+	s := New(config.Config{Listener: config.Listener{Address: "127.0.0.1:0"}}, aggregateReadyState(snapshot), r, "test")
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, request("tools/list", Version))
+	if w.Code != http.StatusOK {
+		t.Fatalf("got %d: %s", w.Code, w.Body.String())
+	}
+	var response struct {
+		Result json.RawMessage `json:"result"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(response.Result, snapshot.ResultJSON()) || int64(len(response.Result)) != snapshot.ResultSize() {
+		t.Fatalf("served=%s measured=%s sizes=%d/%d", response.Result, snapshot.ResultJSON(), len(response.Result), snapshot.ResultSize())
+	}
+	var result struct {
+		Tools      []mcp.Tool `json:"tools"`
+		NextCursor string     `json:"nextCursor"`
+	}
+	if err := json.Unmarshal(response.Result, &result); err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Tools) != 2 || result.Tools[0].Name != "github.search" || result.Tools[1].Name != "postgres.query" || result.NextCursor != "" {
+		t.Fatalf("result=%+v", result)
+	}
+	if result.Tools[0].Description != "find code" || result.Tools[0].OutputSchema == nil || result.Tools[0].Meta["source"] != "github" {
+		t.Fatalf("tool fidelity=%+v", result.Tools[0])
+	}
+}
+
+func TestToolsListServesSmallAggregateAtMaxInt64Limit(t *testing.T) {
+	limits := aggregateLimits()
+	limits.MaxAggregateResponseBytes = math.MaxInt64
+	r := federatedRegistry(t, limits, registry.Catalog{ServerID: "x", Tools: []*mcp.Tool{{Name: "one", InputSchema: map[string]any{"type": "object"}}}})
+	snapshot := r.Snapshot()
+	if snapshot.State != registry.StateReady || len(snapshot.ResultJSON()) == 0 {
+		t.Fatalf("snapshot=%+v", snapshot)
+	}
+	s := New(config.Config{Listener: config.Listener{Address: "127.0.0.1:0"}}, aggregateReadyState(snapshot), r, "test")
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, request("tools/list", Version))
+	if w.Code != http.StatusOK || !bytes.Contains(w.Body.Bytes(), []byte(`"x.one"`)) {
+		t.Fatalf("got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestToolsListRejectsCursorAndReportsAggregateLimit(t *testing.T) {
+	t.Run("cursor", func(t *testing.T) {
+		r := federatedRegistry(t, aggregateLimits(), registry.Catalog{ServerID: "x", Tools: []*mcp.Tool{{Name: "one", InputSchema: map[string]any{"type": "object"}}}})
+		s := New(config.Config{Listener: config.Listener{Address: "127.0.0.1:0"}}, aggregateReadyState(r.Snapshot()), r, "test")
+		req := request("tools/list", Version)
+		var body map[string]any
+		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		body["params"].(map[string]any)["cursor"] = "opaque"
+		encoded, _ := json.Marshal(body)
+		req.Body = io.NopCloser(bytes.NewReader(encoded))
+		w := httptest.NewRecorder()
+		s.Handler().ServeHTTP(w, req)
+		if w.Code != http.StatusBadRequest || !bytes.Contains(w.Body.Bytes(), []byte(`"code":-32602`)) {
+			t.Fatalf("got %d: %s", w.Code, w.Body.String())
+		}
+	})
+	t.Run("limit", func(t *testing.T) {
+		limits := aggregateLimits()
+		limits.MaxAggregateTools = 1
+		r := federatedRegistry(t, limits, registry.Catalog{ServerID: "x", Tools: []*mcp.Tool{{Name: "one", InputSchema: map[string]any{"type": "object"}}, {Name: "two", InputSchema: map[string]any{"type": "object"}}}})
+		s := New(config.Config{Listener: config.Listener{Address: "127.0.0.1:0"}}, aggregateReadyState(r.Snapshot()), r, "test")
+		w := httptest.NewRecorder()
+		s.Handler().ServeHTTP(w, request("tools/list", Version))
+		if w.Code != http.StatusOK || !bytes.Contains(w.Body.Bytes(), []byte("conduit catalog limit exceeded")) {
+			t.Fatalf("got %d: %s", w.Code, w.Body.String())
+		}
+	})
 }
