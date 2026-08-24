@@ -11,8 +11,8 @@ import (
 	"strings"
 	"sync/atomic"
 
-	"github.com/conduit-mcp/conduit/internal/config"
-	"github.com/conduit-mcp/conduit/internal/registry"
+	"github.com/Rakshita-0023/conduit/internal/config"
+	"github.com/Rakshita-0023/conduit/internal/registry"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 

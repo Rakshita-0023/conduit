@@ -1,4 +1,4 @@
-module github.com/conduit-mcp/conduit
+module github.com/Rakshita-0023/conduit
 
 go 1.25.0
 

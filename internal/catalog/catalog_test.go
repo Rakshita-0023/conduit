@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/conduit-mcp/conduit/internal/config"
+	"github.com/Rakshita-0023/conduit/internal/config"
 )
 
 func limits() config.Limits {

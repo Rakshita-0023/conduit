@@ -22,7 +22,7 @@ See [COMPATIBILITY.md](COMPATIBILITY.md) for the exact protocol profile and [doc
 Requires Go 1.25 or newer.
 
 ```sh
-git clone https://github.com/conduit-mcp/conduit.git
+git clone https://github.com/Rakshita-0023/conduit.git
 cd conduit
 cp config.example.yaml conduit.yaml
 # Edit conduit.yaml: set downstream URLs, credentials, and policy.

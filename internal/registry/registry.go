@@ -10,8 +10,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/conduit-mcp/conduit/internal/config"
-	"github.com/conduit-mcp/conduit/internal/policy"
+	"github.com/Rakshita-0023/conduit/internal/config"
+	"github.com/Rakshita-0023/conduit/internal/policy"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
