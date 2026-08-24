@@ -1,8 +1,11 @@
 package policy
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"github.com/conduit-mcp/conduit/internal/config"
+	"sort"
 	"strings"
 )
 
@@ -28,6 +31,21 @@ func (p Compiled) Allowed(name string) bool {
 		}
 	}
 	return false
+}
+func (p Compiled) Digest() string {
+	allow := append([]string(nil), p.allow...)
+	deny := append([]string(nil), p.deny...)
+	sort.Strings(allow)
+	sort.Strings(deny)
+	h := sha256.New()
+	for _, group := range [][]string{allow, deny} {
+		for _, rule := range group {
+			_, _ = h.Write([]byte{0})
+			_, _ = h.Write([]byte(rule))
+		}
+		_, _ = h.Write([]byte{1})
+	}
+	return "sha256:" + hex.EncodeToString(h.Sum(nil))
 }
 func match(rule, name string) bool {
 	return rule == name || strings.HasSuffix(rule, ".*") && strings.HasPrefix(name, strings.TrimSuffix(rule, "*"))

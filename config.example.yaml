@@ -12,8 +12,10 @@ limits:
   max_downstream_catalog_bytes: 1048576
   max_aggregate_tools: 512
   max_aggregate_response_bytes: 4194304
+  max_tool_response_bytes: 4194304
   catalog_refresh_interval: 60s
   request_timeout: 10s
+  tool_call_timeout: 30s
 downstreams:
   - id: example
     url: http://127.0.0.1:9000/mcp

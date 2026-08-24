@@ -8,14 +8,31 @@ import (
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
+	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
+	"github.com/conduit-mcp/conduit/internal/audit"
 	"github.com/conduit-mcp/conduit/internal/config"
+	"github.com/conduit-mcp/conduit/internal/dispatch"
 	"github.com/conduit-mcp/conduit/internal/health"
 	"github.com/conduit-mcp/conduit/internal/policy"
 	"github.com/conduit-mcp/conduit/internal/registry"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
+
+func TestHTTPServerWriteTimeoutSaturates(t *testing.T) {
+	server := HTTPServer("127.0.0.1:0", http.NotFoundHandler(), time.Duration(1<<63-1))
+	if server.WriteTimeout != time.Duration(1<<63-1) || server.WriteTimeout <= 0 {
+		t.Fatalf("WriteTimeout=%v", server.WriteTimeout)
+	}
+	normal := HTTPServer("127.0.0.1:0", http.NotFoundHandler(), time.Second)
+	if normal.WriteTimeout != 6*time.Second {
+		t.Fatalf("normal WriteTimeout=%v", normal.WriteTimeout)
+	}
+}
 
 func readyState() *health.State {
 	s := health.New([]string{"x"})
@@ -298,6 +315,34 @@ func TestSDKValidatesToolNameHeaderBeforeUnknownTool(t *testing.T) {
 	s.Handler().ServeHTTP(w, r)
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("got %d: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestToolsCallWithNilRegistryReturnsNotReady(t *testing.T) {
+	var downstreamCalls atomic.Int32
+	downstream := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { downstreamCalls.Add(1) }))
+	defer downstream.Close()
+	auditLog, err := audit.Open(filepath.Join(t.TempDir(), "audit.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer auditLog.Close()
+	d := dispatch.New(config.Config{Audit: config.Audit{Path: "unused"}, Limits: config.Limits{MaxToolResponseBytes: 1024, ToolCallTimeout: time.Second}, Servers: []config.Downstream{{ID: "x", URL: downstream.URL}}}, nil, auditLog, readyState(), "test")
+	s := New(config.Config{Listener: config.Listener{Address: "127.0.0.1:0"}}, readyState(), nil, "test", d)
+	body := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"x.visible","arguments":{},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}`
+	r := httptest.NewRequest(http.MethodPost, "/mcp", strings.NewReader(body))
+	r.Header.Set("Content-Type", "application/json")
+	r.Header.Set("Accept", "application/json, text/event-stream")
+	r.Header.Set("MCP-Protocol-Version", Version)
+	r.Header.Set("Mcp-Method", "tools/call")
+	r.Header.Set("Mcp-Name", "x.visible")
+	w := httptest.NewRecorder()
+	s.Handler().ServeHTTP(w, r)
+	if w.Code != http.StatusServiceUnavailable || !strings.Contains(w.Body.String(), "conduit not ready") {
+		t.Fatalf("got %d: %s", w.Code, w.Body.String())
+	}
+	if downstreamCalls.Load() != 0 {
+		t.Fatalf("downstream calls=%d", downstreamCalls.Load())
 	}
 }
 

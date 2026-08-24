@@ -228,6 +228,49 @@ func TestUntrustedToolDoesNotPanicAndConcurrentSnapshotsAreAtomic(t *testing.T) 
 	wg.Wait()
 }
 
+func TestAuthorizationLinearizationBlocksPublicationWithoutDeadlock(t *testing.T) {
+	r := newRegistry(t, config.Policy{Allow: []string{"x.*"}}, testLimits())
+	publish(t, r, Catalog{ServerID: "x", Tools: []*mcp.Tool{testTool("one")}})
+	prepared, err := r.PrepareExecution("x.one")
+	if err != nil {
+		t.Fatal(err)
+	}
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	committed := make(chan error, 1)
+	go func() {
+		committed <- r.CommitAuthorization(prepared, func() error {
+			close(entered)
+			<-release
+			return nil
+		})
+	}()
+	<-entered
+	published := make(chan error, 1)
+	publicationStarted := make(chan struct{})
+	go func() {
+		close(publicationStarted)
+		_, err := r.Publish(Catalog{ServerID: "x", Tools: []*mcp.Tool{testTool("two")}})
+		published <- err
+	}()
+	<-publicationStarted
+	select {
+	case err := <-published:
+		t.Fatalf("publication completed during authorization: %v", err)
+	default:
+	}
+	close(release)
+	if err := <-committed; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-published; err != nil {
+		t.Fatal(err)
+	}
+	if err := r.CommitAuthorization(prepared, func() error { return nil }); !errors.Is(err, ErrRouteChanged) {
+		t.Fatalf("stale authorization error=%v", err)
+	}
+}
+
 func sameStrings(got, want []string) bool {
 	if len(got) != len(want) {
 		return false

@@ -12,6 +12,7 @@ import (
 	"github.com/conduit-mcp/conduit/internal/audit"
 	"github.com/conduit-mcp/conduit/internal/catalog"
 	"github.com/conduit-mcp/conduit/internal/config"
+	"github.com/conduit-mcp/conduit/internal/dispatch"
 	"github.com/conduit-mcp/conduit/internal/health"
 	"github.com/conduit-mcp/conduit/internal/ingress"
 	"github.com/conduit-mcp/conduit/internal/policy"
@@ -24,6 +25,7 @@ type App struct {
 	Health      *health.State
 	Registry    *registry.Registry
 	Audit       *audit.Log
+	Dispatcher  *dispatch.Dispatcher
 	Server      *http.Server
 	Listener    net.Listener
 	cancel      context.CancelFunc
@@ -35,6 +37,9 @@ type App struct {
 	// publication critical section in package tests.
 	testBeforePublicationLock func()
 	testAfterPublicationLock  func()
+	// testAfterDispatchShutdownAdmission is nil in production. It lets package
+	// tests synchronize the real reject-new-work to cancel-active boundary.
+	testAfterDispatchShutdownAdmission func()
 }
 
 func Start(ctx context.Context, c config.Config, build string) (*App, error) {
@@ -59,7 +64,8 @@ func Start(ctx context.Context, c config.Config, build string) (*App, error) {
 	h := health.New(ids)
 	impl := mcp.Implementation{Name: "conduit", Version: build}
 	r := registry.New(c.Limits, compiled, impl)
-	in := ingress.New(c, h, r, build)
+	d := dispatch.New(c, r, a, h, build)
+	in := ingress.New(c, h, r, build, d)
 	listener, e := net.Listen("tcp", c.Listener.Address)
 	if e != nil {
 		_ = a.Close()
@@ -71,7 +77,7 @@ func Start(ctx context.Context, c config.Config, build string) (*App, error) {
 		return nil, e
 	}
 	refreshCtx, cancel := context.WithCancel(ctx)
-	app := &App{Config: c, Health: h, Registry: r, Audit: a, Server: ingress.HTTPServer(c.Listener.Address, in.Handler()), Listener: listener, cancel: cancel, refreshDone: make(chan struct{})}
+	app := &App{Config: c, Health: h, Registry: r, Audit: a, Dispatcher: d, Server: ingress.HTTPServer(c.Listener.Address, in.Handler(), c.Limits.ToolCallTimeout), Listener: listener, cancel: cancel, refreshDone: make(chan struct{})}
 	h.SetLive(true)
 	for _, s := range c.Servers {
 		app.refreshWG.Add(1)
@@ -133,7 +139,23 @@ func (a *App) refreshOnce(parent context.Context, server config.Downstream) {
 func (a *App) Close(ctx context.Context) error {
 	a.cancel()
 	a.Health.SetLive(false)
-	e := a.Server.Shutdown(ctx)
+	// Stop dispatch admission before closing the listener. Handlers that were
+	// already accepted but have not reached Execute will then fail closed.
+	a.Dispatcher.BeginShutdown()
+	if a.testAfterDispatchShutdownAdmission != nil {
+		a.testAfterDispatchShutdownAdmission()
+	}
+	var e error
+	if le := a.Listener.Close(); le != nil && !errors.Is(le, net.ErrClosed) {
+		e = fmt.Errorf("close listener: %w", le)
+	}
+	// Server.Shutdown does not cancel active requests when its deadline expires.
+	// Dispatcher-owned cancellation does, and Wait keeps audit storage alive
+	// through every active invocation's terminal audit path.
+	a.Dispatcher.CancelActive()
+	if se := a.Server.Shutdown(ctx); se != nil && e == nil {
+		e = se
+	}
 	select {
 	case <-a.refreshDone:
 	case <-ctx.Done():
@@ -141,9 +163,7 @@ func (a *App) Close(ctx context.Context) error {
 			e = ctx.Err()
 		}
 	}
-	if le := a.Listener.Close(); le != nil && !errors.Is(le, net.ErrClosed) && e == nil {
-		e = fmt.Errorf("close listener: %w", le)
-	}
+	a.Dispatcher.Wait()
 	ae := a.Audit.Close()
 	if e != nil {
 		return e

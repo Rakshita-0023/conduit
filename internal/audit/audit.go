@@ -1,14 +1,31 @@
 package audit
 
 import (
+	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"sync"
+	"time"
 )
 
 type Log struct {
-	mu sync.Mutex
-	f  *os.File
+	mu     sync.Mutex
+	f      *os.File
+	failed bool
+}
+
+type Event struct {
+	Event              string `json:"event"`
+	Timestamp          string `json:"timestamp"`
+	CallID             string `json:"call_id,omitempty"`
+	PublicTool         string `json:"public_tool,omitempty"`
+	ServerID           string `json:"server_id,omitempty"`
+	DownstreamToolName string `json:"downstream_tool_name,omitempty"`
+	RegistryGeneration uint64 `json:"registry_generation,omitempty"`
+	PolicyDigest       string `json:"policy_digest,omitempty"`
+	Outcome            string `json:"outcome,omitempty"`
+	DurationMS         int64  `json:"duration_ms,omitempty"`
 }
 
 func Open(path string) (*Log, error) {
@@ -29,14 +46,51 @@ func Open(path string) (*Log, error) {
 	return l, nil
 }
 func (l *Log) AppendReady() error {
+	return l.Append(Event{Event: "audit_ready"})
+}
+
+func (l *Log) Append(event Event) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if _, e := l.f.WriteString("{\"event\":\"audit_ready\"}\n"); e != nil {
-		return fmt.Errorf("append audit readiness: %w", e)
+	if l.failed || l.f == nil {
+		return fmt.Errorf("audit unavailable")
 	}
-	if e := l.f.Sync(); e != nil {
-		return fmt.Errorf("sync audit readiness: %w", e)
+	if event.Timestamp == "" {
+		event.Timestamp = time.Now().UTC().Format(time.RFC3339Nano)
+	}
+	b, err := json.Marshal(event)
+	if err != nil {
+		return fmt.Errorf("encode audit event: %w", err)
+	}
+	b = append(b, '\n')
+	n, err := l.f.Write(b)
+	if err == nil && n != len(b) {
+		err = io.ErrShortWrite
+	}
+	if err == nil {
+		err = l.f.Sync()
+	}
+	if err != nil {
+		l.failed = true
+		return fmt.Errorf("append audit event: %w", err)
 	}
 	return nil
 }
-func (l *Log) Close() error { l.mu.Lock(); defer l.mu.Unlock(); return l.f.Close() }
+
+func (l *Log) Available() bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return !l.failed && l.f != nil
+}
+
+func (l *Log) Close() error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.f == nil {
+		return nil
+	}
+	err := l.f.Close()
+	l.f = nil
+	l.failed = true
+	return err
+}

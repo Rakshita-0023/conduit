@@ -48,6 +48,7 @@ type Snapshot struct {
 
 	tools      []*mcp.Tool
 	routes     map[string]Route
+	execution  map[string]executionRoute
 	resultJSON json.RawMessage
 	resultSize int64
 }
@@ -68,6 +69,24 @@ type Registry struct {
 	impl     mcp.Implementation
 	active   *Snapshot
 }
+
+type executionRoute struct {
+	route Route
+	tool  *mcp.Tool
+}
+
+type PreparedRoute struct {
+	Generation   uint64
+	Route        Route
+	Tool         *mcp.Tool
+	PolicyDigest string
+}
+
+var (
+	ErrRouteChanged = errors.New("route changed")
+	ErrRouteDenied  = errors.New("route denied")
+	ErrRouteMissing = errors.New("route missing")
+)
 
 var errAggregateResponseOverLimit = errors.New("aggregate response exceeds byte limit")
 
@@ -117,6 +136,48 @@ func (r *Registry) Count(id string) int {
 	return len(r.catalogs[id].Tools)
 }
 
+// PrepareExecution returns a caller-owned clone of the original downstream
+// tool definition. It intentionally does not expose execution data through
+// Snapshot, whose public routes remain discovery-filtered.
+func (r *Registry) PrepareExecution(name string) (PreparedRoute, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if r.active.State != StateReady {
+		return PreparedRoute{}, ErrRouteMissing
+	}
+	entry, ok := r.active.execution[name]
+	if !ok {
+		return PreparedRoute{}, ErrRouteMissing
+	}
+	tool, err := cloneTool(entry.tool)
+	if err != nil {
+		return PreparedRoute{}, fmt.Errorf("clone execution tool: %w", err)
+	}
+	return PreparedRoute{Generation: r.active.Generation, Route: entry.route, Tool: tool, PolicyDigest: r.policy.Digest()}, nil
+}
+
+// CommitAuthorization creates the authorization linearization point. The
+// callback must only durably write the audit record; it must not call Registry,
+// health, or refresh code while this read lock prevents publication.
+func (r *Registry) CommitAuthorization(prepared PreparedRoute, commit func() error) error {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if r.active.State != StateReady || r.active.Generation != prepared.Generation {
+		return ErrRouteChanged
+	}
+	entry, ok := r.active.execution[prepared.Route.PublicName]
+	if !ok {
+		return ErrRouteMissing
+	}
+	if entry.route != prepared.Route {
+		return ErrRouteChanged
+	}
+	if !r.policy.Allowed(prepared.Route.PublicName) {
+		return ErrRouteDenied
+	}
+	return commit()
+}
+
 func (r *Registry) rebuildLocked() {
 	next := &Snapshot{Generation: r.active.Generation + 1, CreatedAt: time.Now().UTC(), State: StateUnavailable}
 	if len(r.catalogs) == 0 {
@@ -125,8 +186,9 @@ func (r *Registry) rebuildLocked() {
 	}
 
 	type candidate struct {
-		tool  *mcp.Tool
-		route Route
+		tool       *mcp.Tool
+		downstream *mcp.Tool
+		route      Route
 	}
 	byName := make(map[string]candidate)
 	for _, catalog := range r.catalogs {
@@ -143,10 +205,14 @@ func (r *Registry) rebuildLocked() {
 			}
 			publicTool := *downstream
 			publicTool.Name = publicName
-			byName[publicName] = candidate{tool: &publicTool, route: Route{PublicName: publicName, ServerID: catalog.ServerID, DownstreamToolName: downstream.Name}}
+			byName[publicName] = candidate{tool: &publicTool, downstream: downstream, route: Route{PublicName: publicName, ServerID: catalog.ServerID, DownstreamToolName: downstream.Name}}
 		}
 	}
 
+	next.execution = make(map[string]executionRoute, len(byName))
+	for name, entry := range byName {
+		next.execution[name] = executionRoute{route: entry.route, tool: entry.downstream}
+	}
 	names := make([]string, 0, len(byName))
 	for name := range byName {
 		if r.policy.Allowed(name) {
@@ -173,6 +239,7 @@ func (r *Registry) rebuildLocked() {
 		}
 		next.tools = nil
 		next.routes = nil
+		next.execution = nil
 		r.active = next
 		return
 	}
@@ -257,15 +324,26 @@ func cloneCatalog(c Catalog) (Catalog, error) {
 		if tool == nil {
 			continue
 		}
-		data, err := json.Marshal(tool)
+		copy, err := cloneTool(tool)
 		if err != nil {
-			return Catalog{}, fmt.Errorf("clone catalog tool: %w", err)
-		}
-		copy := new(mcp.Tool)
-		if err := json.Unmarshal(data, copy); err != nil {
 			return Catalog{}, fmt.Errorf("clone catalog tool: %w", err)
 		}
 		owned.Tools[i] = copy
 	}
 	return owned, nil
+}
+
+func cloneTool(tool *mcp.Tool) (*mcp.Tool, error) {
+	if tool == nil {
+		return nil, nil
+	}
+	data, err := json.Marshal(tool)
+	if err != nil {
+		return nil, err
+	}
+	copy := new(mcp.Tool)
+	if err := json.Unmarshal(data, copy); err != nil {
+		return nil, err
+	}
+	return copy, nil
 }

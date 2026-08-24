@@ -7,22 +7,31 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"time"
 
 	"github.com/conduit-mcp/conduit/internal/config"
+	"github.com/conduit-mcp/conduit/internal/dispatch"
 	"github.com/conduit-mcp/conduit/internal/health"
+	"github.com/conduit-mcp/conduit/internal/mcpheaders"
 	"github.com/conduit-mcp/conduit/internal/registry"
+	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 const Version = "2026-07-28"
 
 type Server struct {
-	handler http.Handler
-	health  *health.State
+	handler    http.Handler
+	health     *health.State
+	dispatcher *dispatch.Dispatcher
 }
 
-func New(cfg config.Config, state *health.State, catalogRegistry *registry.Registry, buildVersion string) *Server {
+func New(cfg config.Config, state *health.State, catalogRegistry *registry.Registry, buildVersion string, dispatchers ...*dispatch.Dispatcher) *Server {
+	var toolDispatcher *dispatch.Dispatcher
+	if len(dispatchers) > 0 {
+		toolDispatcher = dispatchers[0]
+	}
 	caps := &mcp.ServerCapabilities{Tools: &mcp.ToolCapabilities{}}
 	mcpServer := mcp.NewServer(&mcp.Implementation{Name: "conduit", Version: buildVersion}, &mcp.ServerOptions{Capabilities: caps})
 	sdk := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return mcpServer }, &mcp.StreamableHTTPOptions{Stateless: true, JSONResponse: true, MaxRequestBodyBytes: 1 << 20, PropagateRequestCancellation: true})
@@ -72,16 +81,23 @@ func New(cfg config.Config, state *health.State, catalogRegistry *registry.Regis
 			serveToolsList(w, r, request, sdk, state, catalogRegistry)
 			return
 		}
-		if !state.Snapshot().Ready {
-			http.Error(w, "conduit not ready", http.StatusServiceUnavailable)
-			return
-		}
-		sdk.ServeHTTP(w, r)
+		serveToolsCall(w, r, request, sdk, state, catalogRegistry, toolDispatcher)
 	})}
 }
 func (s *Server) Handler() http.Handler { return s.handler }
-func HTTPServer(addr string, h http.Handler) *http.Server {
-	return &http.Server{Addr: addr, Handler: h, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 15 * time.Second, IdleTimeout: 30 * time.Second}
+func HTTPServer(addr string, h http.Handler, toolTimeout ...time.Duration) *http.Server {
+	writeTimeout := 15 * time.Second
+	if len(toolTimeout) > 0 && toolTimeout[0] > 0 {
+		writeTimeout = saturatingDurationAdd(toolTimeout[0], 5*time.Second)
+	}
+	return &http.Server{Addr: addr, Handler: h, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: writeTimeout, IdleTimeout: 30 * time.Second}
+}
+
+func saturatingDurationAdd(a, b time.Duration) time.Duration {
+	if a > time.Duration(1<<63-1)-b {
+		return time.Duration(1<<63 - 1)
+	}
+	return a + b
 }
 func allowedOrigin(origin string, allowed []string) bool {
 	if origin == "" {
@@ -102,6 +118,7 @@ type requestInfo struct {
 	ID     json.RawMessage
 	Method string
 	Cursor string
+	Params json.RawMessage
 }
 
 func validate2026(r *http.Request) (requestInfo, error) {
@@ -115,12 +132,16 @@ func validate2026(r *http.Request) (requestInfo, error) {
 		JSONRPC string          `json:"jsonrpc"`
 		ID      json.RawMessage `json:"id"`
 		Method  string          `json:"method"`
-		Params  struct {
-			Meta   map[string]any `json:"_meta"`
-			Cursor string         `json:"cursor"`
-		} `json:"params"`
+		Params  json.RawMessage `json:"params"`
 	}
 	if json.Unmarshal(b, &v) != nil || v.JSONRPC != "2.0" || len(v.ID) == 0 || v.Method == "" {
+		return requestInfo{}, errInvalid
+	}
+	var params struct {
+		Meta   map[string]any `json:"_meta"`
+		Cursor string         `json:"cursor"`
+	}
+	if json.Unmarshal(v.Params, &params) != nil {
 		return requestInfo{}, errInvalid
 	}
 	if err := validRequestID(v.ID); err != nil {
@@ -129,7 +150,7 @@ func validate2026(r *http.Request) (requestInfo, error) {
 	if r.Header.Get("MCP-Protocol-Version") != Version || r.Header.Get("Mcp-Method") != v.Method {
 		return requestInfo{}, errInvalid
 	}
-	meta := v.Params.Meta
+	meta := params.Meta
 	if meta == nil {
 		return requestInfo{}, errInvalid
 	}
@@ -140,7 +161,65 @@ func validate2026(r *http.Request) (requestInfo, error) {
 	if _, ok := meta["io.modelcontextprotocol/clientCapabilities"]; !ok {
 		return requestInfo{}, errInvalid
 	}
-	return requestInfo{ID: v.ID, Method: v.Method, Cursor: v.Params.Cursor}, nil
+	return requestInfo{ID: v.ID, Method: v.Method, Cursor: params.Cursor, Params: v.Params}, nil
+}
+
+func serveToolsCall(w http.ResponseWriter, r *http.Request, request requestInfo, sdk http.Handler, state *health.State, catalogs *registry.Registry, toolDispatcher *dispatch.Dispatcher) {
+	if !sdkTransportAdmits(w, r, sdk) {
+		return
+	}
+	if catalogs == nil {
+		http.Error(w, "conduit not ready", http.StatusServiceUnavailable)
+		return
+	}
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(request.Params, &fields) != nil {
+		http.Error(w, "invalid MCP request", http.StatusBadRequest)
+		return
+	}
+	var name string
+	if raw := fields["name"]; len(raw) == 0 || json.Unmarshal(raw, &name) != nil || name == "" {
+		http.Error(w, "invalid MCP request", http.StatusBadRequest)
+		return
+	}
+	args := fields["arguments"]
+	if len(args) == 0 {
+		args = json.RawMessage(`{}`)
+	}
+	if prepared, err := catalogs.PrepareExecution(name); err == nil {
+		if err := mcpheaders.ValidateCall(r.Header, name, args, prepared.Tool); err != nil {
+			http.Error(w, "invalid MCP request", http.StatusBadRequest)
+			return
+		}
+	} else if r.Header.Get("Mcp-Name") != name {
+		http.Error(w, "invalid MCP request", http.StatusBadRequest)
+		return
+	}
+	if !state.Snapshot().Ready || toolDispatcher == nil {
+		http.Error(w, "conduit not ready", http.StatusServiceUnavailable)
+		return
+	}
+	if raw := fields["requestState"]; len(raw) > 0 {
+		var state string
+		if json.Unmarshal(raw, &state) != nil {
+			http.Error(w, "invalid MCP request", http.StatusBadRequest)
+			return
+		}
+	}
+	response, err := toolDispatcher.Execute(r.Context(), dispatch.Call{PublicName: name, Arguments: args, InputResponses: fields["inputResponses"], RequestState: fields["requestState"]})
+	if err != nil {
+		if local, ok := err.(*dispatch.Error); ok {
+			writeRPCError(w, http.StatusOK, request.ID, int(local.Code), local.Message)
+			return
+		}
+		writeRPCError(w, http.StatusOK, request.ID, -32011, "tool dispatch failed")
+		return
+	}
+	if response.Error != nil {
+		writeRPCWireError(w, request.ID, response.Error)
+		return
+	}
+	writeRPCResult(w, request.ID, response.Result)
 }
 
 func serveToolsList(w http.ResponseWriter, r *http.Request, request requestInfo, sdk http.Handler, state *health.State, catalogs *registry.Registry) {
@@ -255,6 +334,23 @@ func writeRPCError(w http.ResponseWriter, status int, id json.RawMessage, code i
 		Code    int    `json:"code"`
 		Message string `json:"message"`
 	}{Code: code, Message: message}})
+}
+
+func writeRPCWireError(w http.ResponseWriter, id json.RawMessage, err *jsonrpc.Error) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte(`{"jsonrpc":"2.0","id":`))
+	_, _ = w.Write(id)
+	_, _ = w.Write([]byte(`,"error":{"code":`))
+	_, _ = w.Write([]byte(strconv.FormatInt(err.Code, 10)))
+	encoded, _ := json.Marshal(err.Message)
+	_, _ = w.Write([]byte(`,"message":`))
+	_, _ = w.Write(encoded)
+	if len(err.Data) > 0 {
+		_, _ = w.Write([]byte(`,"data":`))
+		_, _ = w.Write(err.Data)
+	}
+	_, _ = w.Write([]byte("}}\n"))
 }
 
 var transportProbeBody = []byte(`{"jsonrpc":"2.0","id":"conduit-transport-probe","method":"conduit/transport-probe","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}`)

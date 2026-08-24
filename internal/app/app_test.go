@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -17,6 +18,7 @@ import (
 	"time"
 
 	"github.com/conduit-mcp/conduit/internal/config"
+	"github.com/conduit-mcp/conduit/internal/dispatch"
 	"github.com/conduit-mcp/conduit/internal/health"
 	"github.com/conduit-mcp/conduit/internal/ingress"
 	"github.com/conduit-mcp/conduit/internal/policy"
@@ -28,7 +30,7 @@ func downstream(t *testing.T, block <-chan struct{}) *httptest.Server {
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { <-block }))
 }
 func cfg(path, url string) config.Config {
-	return config.Config{Listener: config.Listener{Address: "127.0.0.1:0"}, Audit: config.Audit{Path: path}, Limits: config.Limits{MaxPagesPerDownstream: 2, MaxToolsPerDownstream: 2, MaxDownstreamCatalogBytes: 1024, MaxAggregateTools: 2, MaxAggregateResponseBytes: 1024, CatalogRefreshInterval: time.Hour, RequestTimeout: 50 * time.Millisecond}, Servers: []config.Downstream{{ID: "x", URL: url}}}
+	return config.Config{Listener: config.Listener{Address: "127.0.0.1:0"}, Audit: config.Audit{Path: path}, Limits: config.Limits{MaxPagesPerDownstream: 2, MaxToolsPerDownstream: 2, MaxDownstreamCatalogBytes: 1024, MaxAggregateTools: 2, MaxAggregateResponseBytes: 1024, MaxToolResponseBytes: 1024, CatalogRefreshInterval: time.Hour, RequestTimeout: 50 * time.Millisecond, ToolCallTimeout: time.Second}, Servers: []config.Downstream{{ID: "x", URL: url}}}
 }
 func TestStartIsLiveBeforeInitialRefreshCompletes(t *testing.T) {
 	block := make(chan struct{})
@@ -142,6 +144,190 @@ func TestCloseCancelsRefreshAndReadiness(t *testing.T) {
 	close(release)
 }
 
+func TestCloseOwnsActiveDispatchTerminalAudit(t *testing.T) {
+	started := make(chan struct{})
+	cancelled := make(chan struct{})
+	release := make(chan struct{})
+	var startOnce, cancelOnce sync.Once
+	downstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			ID     any    `json:"id"`
+			Method string `json:"method"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&request)
+		w.Header().Set("Content-Type", "application/json")
+		switch request.Method {
+		case "server/discover":
+			_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": request.ID, "result": map[string]any{"resultType": "complete", "supportedVersions": []string{"2026-07-28"}, "capabilities": map[string]any{"tools": map[string]any{}}}})
+		case "tools/list":
+			_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": request.ID, "result": map[string]any{"resultType": "complete", "tools": []any{map[string]any{"name": "visible", "inputSchema": map[string]any{"type": "object"}}}}})
+		case "tools/call":
+			startOnce.Do(func() { close(started) })
+			<-r.Context().Done()
+			cancelOnce.Do(func() { close(cancelled) })
+			<-release
+		}
+	}))
+	defer downstream.Close()
+	c := cfg(filepath.Join(t.TempDir(), "audit"), downstream.URL)
+	c.Policy.Allow = []string{"x.*"}
+	a, err := Start(context.Background(), c, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	serveErr := make(chan error, 1)
+	go func() { serveErr <- a.Server.Serve(a.Listener) }()
+	waitFor(t, time.Second, func() bool { return a.Health.Snapshot().Ready })
+
+	callDone := make(chan struct{})
+	go func() {
+		defer close(callDone)
+		request := toolCallRequest(t, a.Listener.Addr().String())
+		response, err := http.DefaultClient.Do(request)
+		if err == nil {
+			response.Body.Close()
+		}
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("downstream tool call did not start")
+	}
+
+	atBoundary := make(chan struct{})
+	continueClose := make(chan struct{})
+	a.testAfterDispatchShutdownAdmission = func() {
+		close(atBoundary)
+		<-continueClose
+	}
+	closeDone := make(chan error, 1)
+	go func() { closeDone <- a.Close(context.Background()) }()
+	select {
+	case <-atBoundary:
+	case <-time.After(time.Second):
+		t.Fatal("Close did not reach dispatch shutdown boundary")
+	}
+	if !a.Audit.Available() {
+		t.Fatal("audit closed before active dispatch terminal path")
+	}
+	if _, err := a.Dispatcher.Execute(context.Background(), dispatch.Call{PublicName: "x.visible"}); err == nil {
+		t.Fatal("new dispatch was accepted after shutdown started")
+	} else if local, ok := err.(*dispatch.Error); !ok || local.Code != dispatch.CodeToolUnavailable {
+		t.Fatalf("new dispatch err=%v", err)
+	}
+	close(continueClose)
+	select {
+	case <-cancelled:
+	case <-time.After(time.Second):
+		t.Fatal("active downstream context was not cancelled")
+	}
+	close(release)
+	select {
+	case err := <-closeDone:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Close did not complete")
+	}
+	select {
+	case <-callDone:
+	case <-time.After(time.Second):
+		t.Fatal("upstream tools/call did not return")
+	}
+	if body, err := os.ReadFile(c.Audit.Path); err != nil || !strings.Contains(string(body), "tool_call_unknown_after_dispatch") {
+		t.Fatalf("terminal audit missing: %q err=%v", body, err)
+	}
+	if err := <-serveErr; err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
+		t.Fatalf("Serve=%v", err)
+	}
+}
+
+func TestCloseReturnsAfterCancellationWithStubbornDownstream(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var startOnce sync.Once
+	downstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			ID     any    `json:"id"`
+			Method string `json:"method"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&request)
+		w.Header().Set("Content-Type", "application/json")
+		switch request.Method {
+		case "server/discover":
+			_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": request.ID, "result": map[string]any{"resultType": "complete", "supportedVersions": []string{"2026-07-28"}, "capabilities": map[string]any{"tools": map[string]any{}}}})
+		case "tools/list":
+			_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": request.ID, "result": map[string]any{"resultType": "complete", "tools": []any{map[string]any{"name": "visible", "inputSchema": map[string]any{"type": "object"}}}}})
+		case "tools/call":
+			startOnce.Do(func() { close(started) })
+			<-release // Deliberately ignore client cancellation.
+		}
+	}))
+	defer downstream.Close()
+	c := cfg(filepath.Join(t.TempDir(), "audit"), downstream.URL)
+	c.Policy.Allow = []string{"x.*"}
+	a, err := Start(context.Background(), c, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	serveErr := make(chan error, 1)
+	go func() { serveErr <- a.Server.Serve(a.Listener) }()
+	waitFor(t, time.Second, func() bool { return a.Health.Snapshot().Ready })
+	callDone := make(chan struct{})
+	go func() {
+		defer close(callDone)
+		response, err := http.DefaultClient.Do(toolCallRequest(t, a.Listener.Addr().String()))
+		if err == nil {
+			response.Body.Close()
+		}
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("downstream tool call did not start")
+	}
+	closeCtx, cancel := context.WithDeadline(context.Background(), time.Now())
+	defer cancel()
+	closeDone := make(chan error, 1)
+	go func() { closeDone <- a.Close(closeCtx) }()
+	select {
+	case err := <-closeDone:
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("Close error=%v, want shutdown deadline", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Close blocked on stubborn downstream")
+	}
+	if a.Audit.Available() {
+		t.Fatal("audit remained open after Close")
+	}
+	select {
+	case <-callDone:
+	case <-time.After(time.Second):
+		t.Fatal("upstream tools/call did not return")
+	}
+	close(release)
+	if err := <-serveErr; err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
+		t.Fatalf("Serve=%v", err)
+	}
+}
+
+func toolCallRequest(t *testing.T, address string) *http.Request {
+	t.Helper()
+	body := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"x.visible","arguments":{},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}`
+	request, err := http.NewRequest(http.MethodPost, "http://"+address+"/mcp", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Accept", "application/json, text/event-stream")
+	request.Header.Set("MCP-Protocol-Version", "2026-07-28")
+	request.Header.Set("Mcp-Method", "tools/call")
+	request.Header.Set("Mcp-Name", "x.visible")
+	return request
+}
+
 func TestStartFailsWhenListenerCannotBind(t *testing.T) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -155,7 +341,7 @@ func TestStartFailsWhenListenerCannotBind(t *testing.T) {
 	}
 }
 
-func TestToolCallNeverReachesDownstream(t *testing.T) {
+func TestToolCallReachesDownstreamExactlyOnce(t *testing.T) {
 	var mu sync.Mutex
 	var methods []string
 	downstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -172,11 +358,19 @@ func TestToolCallNeverReachesDownstream(t *testing.T) {
 			_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": request.ID, "result": map[string]any{"resultType": "complete", "supportedVersions": []string{"2026-07-28"}, "capabilities": map[string]any{"tools": map[string]any{}}}})
 			return
 		}
+		if request.Method == "tools/call" {
+			if r.Header.Get("Authorization") != "Bearer configured-secret" || r.Header.Get("Cookie") != "" || r.Header.Get("Origin") != "" {
+				t.Errorf("caller headers leaked downstream: %v", r.Header)
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": request.ID, "result": map[string]any{"content": []any{map[string]any{"type": "text", "text": "ok"}}}})
+			return
+		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": request.ID, "result": map[string]any{"resultType": "complete", "tools": []any{map[string]any{"name": "visible", "inputSchema": map[string]any{"type": "object"}}}}})
 	}))
 	defer downstream.Close()
 	c := cfg(filepath.Join(t.TempDir(), "audit"), downstream.URL)
 	c.Policy.Allow = []string{"x.*"}
+	c.Servers[0].Headers = map[string]string{"Authorization": "Bearer configured-secret"}
 	a, err := Start(context.Background(), c, "test")
 	if err != nil {
 		t.Fatal(err)
@@ -187,7 +381,7 @@ func TestToolCallNeverReachesDownstream(t *testing.T) {
 		if err := a.Close(context.Background()); err != nil {
 			t.Error(err)
 		}
-		if err := <-serveErr; err != nil && !errors.Is(err, http.ErrServerClosed) {
+		if err := <-serveErr; err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
 			t.Error(err)
 		}
 	}()
@@ -216,7 +410,7 @@ func TestToolCallNeverReachesDownstream(t *testing.T) {
 	if listResponse.StatusCode != http.StatusOK || !strings.Contains(string(listResponseBody), "x.visible") {
 		t.Fatalf("tools/list status=%d body=%s", listResponse.StatusCode, listResponseBody)
 	}
-	body := []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"public.tool","arguments":{},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}`)
+	body := []byte(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"x.visible","arguments":{},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}`)
 	req, err := http.NewRequest(http.MethodPost, "http://"+a.Listener.Addr().String()+"/mcp", strings.NewReader(string(body)))
 	if err != nil {
 		t.Fatal(err)
@@ -225,18 +419,28 @@ func TestToolCallNeverReachesDownstream(t *testing.T) {
 	req.Header.Set("Accept", "application/json, text/event-stream")
 	req.Header.Set("MCP-Protocol-Version", "2026-07-28")
 	req.Header.Set("Mcp-Method", "tools/call")
-	req.Header.Set("Mcp-Name", "public.tool")
+	req.Header.Set("Mcp-Name", "x.visible")
+	req.Header.Set("Authorization", "Bearer caller-secret")
+	req.Header.Set("Cookie", "caller-cookie")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode < 400 {
+	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("unexpected tools/call status %d", resp.StatusCode)
+	}
+	responseBody, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(responseBody), `"content"`) {
+		t.Fatalf("tools/call body=%s", responseBody)
+	}
+	auditBody, err := os.ReadFile(c.Audit.Path)
+	if err != nil || strings.Contains(string(auditBody), "secret") {
+		t.Fatalf("audit leaked configured credential: %q err=%v", auditBody, err)
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	if strings.Join(methods, ",") != "server/discover,tools/list" {
+	if strings.Join(methods, ",") != "server/discover,tools/list,tools/call" {
 		t.Fatalf("downstream methods=%v", methods)
 	}
 }
