@@ -7,6 +7,7 @@ import (
 	"github.com/conduit-mcp/conduit/internal/app"
 	"github.com/conduit-mcp/conduit/internal/config"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -33,7 +34,7 @@ func main() {
 	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
 	select {
 	case e := <-serveErr:
-		if !errors.Is(e, http.ErrServerClosed) {
+		if !errors.Is(e, http.ErrServerClosed) && !errors.Is(e, net.ErrClosed) {
 			_ = a.Close(context.Background())
 			log.Fatal(e)
 		}

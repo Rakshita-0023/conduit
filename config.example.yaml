@@ -1,10 +1,14 @@
 listener:
+  # Conduit listens only on loopback; use a separate edge proxy if needed.
   address: 127.0.0.1:8080
   allowed_origins: []
 audit:
+  # Durable authorization and terminal-outcome audit log. Keep this private.
   path: ./conduit-audit.jsonl
 policy:
-  allow: []
+  # Public names are <downstream-id>.<tool-name>; deny rules take precedence.
+  allow:
+    - example.*
   deny: []
 limits:
   max_pages_per_downstream: 32
@@ -18,5 +22,7 @@ limits:
   tool_call_timeout: 30s
 downstreams:
   - id: example
+    # Streamable HTTP MCP endpoint. No stdio or legacy MCP transport is supported.
     url: http://127.0.0.1:9000/mcp
+    # Downstream-owned credentials may go here. Never put caller credentials here.
     headers: {}

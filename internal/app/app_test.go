@@ -445,6 +445,118 @@ func TestToolCallReachesDownstreamExactlyOnce(t *testing.T) {
 	}
 }
 
+func TestFederatedPublicBoundaryEndToEnd(t *testing.T) {
+	newDownstream := func(toolNames []string, expectedCall, resultText string, calls *atomic.Int32) *httptest.Server {
+		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			var request struct {
+				ID     any    `json:"id"`
+				Method string `json:"method"`
+				Params struct {
+					Name string `json:"name"`
+				} `json:"params"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&request)
+			w.Header().Set("Content-Type", "application/json")
+			switch request.Method {
+			case "server/discover":
+				_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": request.ID, "result": map[string]any{"resultType": "complete", "supportedVersions": []string{"2026-07-28"}, "capabilities": map[string]any{"tools": map[string]any{}}}})
+			case "tools/list":
+				tools := make([]any, 0, len(toolNames))
+				for _, name := range toolNames {
+					tools = append(tools, map[string]any{"name": name, "inputSchema": map[string]any{"type": "object"}})
+				}
+				_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": request.ID, "result": map[string]any{"resultType": "complete", "tools": tools}})
+			case "tools/call":
+				calls.Add(1)
+				if request.Params.Name != expectedCall {
+					t.Errorf("downstream call name=%q, want %q", request.Params.Name, expectedCall)
+				}
+				_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": request.ID, "result": map[string]any{"content": []any{map[string]any{"type": "text", "text": resultText}}}})
+			default:
+				w.WriteHeader(http.StatusBadRequest)
+			}
+		}))
+	}
+
+	var githubCalls, postgresCalls atomic.Int32
+	github := newDownstream([]string{"search_code", "private"}, "search_code", "github result", &githubCalls)
+	defer github.Close()
+	postgres := newDownstream([]string{"query"}, "query", "postgres result", &postgresCalls)
+	defer postgres.Close()
+
+	c := cfg(filepath.Join(t.TempDir(), "audit"), github.URL)
+	c.Policy.Allow = []string{"github.search_code", "postgres.query"}
+	c.Servers = []config.Downstream{{ID: "github", URL: github.URL}, {ID: "postgres", URL: postgres.URL}}
+	a, err := Start(context.Background(), c, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	serveErr := make(chan error, 1)
+	go func() { serveErr <- a.Server.Serve(a.Listener) }()
+	waitFor(t, time.Second, func() bool { return a.Health.Snapshot().Ready })
+
+	publicRequest := func(method, toolName string) *http.Request {
+		t.Helper()
+		params := map[string]any{"_meta": map[string]any{"io.modelcontextprotocol/protocolVersion": "2026-07-28", "io.modelcontextprotocol/clientCapabilities": map[string]any{}}}
+		if method == "tools/call" {
+			params["name"] = toolName
+			params["arguments"] = map[string]any{}
+		}
+		body, err := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": 1, "method": method, "params": params})
+		if err != nil {
+			t.Fatal(err)
+		}
+		request, err := http.NewRequest(http.MethodPost, "http://"+a.Listener.Addr().String()+"/mcp", bytes.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		request.Header.Set("Content-Type", "application/json")
+		request.Header.Set("Accept", "application/json, text/event-stream")
+		request.Header.Set("MCP-Protocol-Version", "2026-07-28")
+		request.Header.Set("Mcp-Method", method)
+		if toolName != "" {
+			request.Header.Set("Mcp-Name", toolName)
+		}
+		return request
+	}
+	do := func(request *http.Request) (int, []byte) {
+		t.Helper()
+		response, err := http.DefaultClient.Do(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer response.Body.Close()
+		body, err := io.ReadAll(response.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return response.StatusCode, body
+	}
+
+	if status, _ := do(publicRequest("server/discover", "")); status != http.StatusOK {
+		t.Fatalf("server/discover status=%d", status)
+	}
+	if status, body := do(publicRequest("tools/list", "")); status != http.StatusOK || !bytes.Contains(body, []byte(`"github.search_code"`)) || !bytes.Contains(body, []byte(`"postgres.query"`)) || bytes.Contains(body, []byte(`"github.private"`)) {
+		t.Fatalf("tools/list status=%d body=%s", status, body)
+	}
+	if status, body := do(publicRequest("tools/call", "github.search_code")); status != http.StatusOK || !bytes.Contains(body, []byte("github result")) {
+		t.Fatalf("tools/call status=%d body=%s", status, body)
+	}
+	// A discovered-but-policy-hidden tool and an unknown tool must not start transport.
+	_, _ = do(publicRequest("tools/call", "github.private"))
+	_, _ = do(publicRequest("tools/call", "unknown.tool"))
+	if githubCalls.Load() != 1 || postgresCalls.Load() != 0 {
+		t.Fatalf("downstream calls github=%d postgres=%d", githubCalls.Load(), postgresCalls.Load())
+	}
+
+	if err := a.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-serveErr; err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
+		t.Fatalf("Serve=%v", err)
+	}
+}
+
 func TestPeriodicRefreshRemovesStaleCatalogAndRecovers(t *testing.T) {
 	var healthy atomic.Bool
 	healthy.Store(true)

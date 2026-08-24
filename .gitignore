@@ -1,0 +1,8 @@
+# Local build and runtime artifacts
+/conduit
+/conduit.yaml
+/conduit-audit.jsonl
+/coverage.out
+
+# OS metadata
+.DS_Store
