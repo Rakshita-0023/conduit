@@ -1,0 +1,12 @@
+{
+  "name":"malformed downstream response is unknown after dispatch",
+  "downstreams":[{"id":"github","tools":[{"name":"search","inputSchema":{"type":"object"}}],"call_response":{"kind":"malformed"}}],
+  "policy":{"allow":["github.*"],"deny":[]},
+  "call":{"name":"github.search","arguments":{}},
+  "expect":{
+    "ready":true,"tools":["github.search"],
+    "call":{"status":200,"error_code":-32012},
+    "downstream":[{"id":"github","method":"POST","mcp_method":"tools/call","mcp_name":"search","count":1,"tool_name":"search"}],
+    "audit_events":["audit_ready","tool_call_authorized","tool_call_unknown_after_dispatch"]
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "name":"allowed tools/call preserves terminal result",
+  "downstreams":[{"id":"github","tools":[{"name":"search","inputSchema":{"type":"object"}}],
+    "call_response":{"kind":"result","result":{"content":[{"type":"text","text":"found"}],"structuredContent":{"count":1},"_meta":{"opaque":{"kept":true}}}}}],
+  "policy":{"allow":["github.*"],"deny":[]},
+  "call":{"name":"github.search","arguments":{"query":"dispatcher"}},
+  "expect":{
+    "ready":true,"tools":["github.search"],
+    "call":{"status":200,"result":{"_meta":{"opaque":{"kept":true}},"content":[{"text":"found","type":"text"}],"structuredContent":{"count":1}}},
+    "downstream":[{"id":"github","method":"POST","mcp_method":"tools/call","mcp_name":"search","count":1,"tool_name":"search"}],
+    "audit_events":["audit_ready","tool_call_authorized","tool_call_completed"]
+  }
+}

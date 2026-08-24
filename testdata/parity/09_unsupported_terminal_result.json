@@ -1,0 +1,13 @@
+{
+  "name":"unsupported input request result remains unsupported",
+  "downstreams":[{"id":"github","tools":[{"name":"search","inputSchema":{"type":"object"}}],
+    "call_response":{"kind":"result","result":{"resultType":"input_required","requestState":"opaque","inputRequests":{"ask":{"method":"elicitation/create","params":{"message":"continue"}}},"content":[]}}}],
+  "policy":{"allow":["github.*"],"deny":[]},
+  "call":{"name":"github.search","arguments":{}},
+  "expect":{
+    "ready":true,"tools":["github.search"],
+    "call":{"status":200,"error_code":-32013},
+    "downstream":[{"id":"github","method":"POST","mcp_method":"tools/call","count":1,"tool_name":"search"}],
+    "audit_events":["audit_ready","tool_call_authorized","tool_call_downstream_error"]
+  }
+}

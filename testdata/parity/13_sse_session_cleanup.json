@@ -1,0 +1,16 @@
+{
+  "name":"unsupported SSE remains unknown but cleans owned session",
+  "downstreams":[{"id":"github","tools":[{"name":"search","inputSchema":{"type":"object"}}],
+    "call_response":{"kind":"sse","session_id":"sse-session"}}],
+  "policy":{"allow":["github.*"],"deny":[]},
+  "call":{"name":"github.search","arguments":{}},
+  "expect":{
+    "ready":true,"tools":["github.search"],
+    "call":{"status":200,"error_code":-32012},
+    "downstream":[
+      {"id":"github","method":"POST","mcp_method":"tools/call","count":1,"tool_name":"search"},
+      {"id":"github","method":"DELETE","session_id":"sse-session","count":1}
+    ],
+    "audit_events":["audit_ready","tool_call_authorized","tool_call_unknown_after_dispatch"]
+  }
+}
