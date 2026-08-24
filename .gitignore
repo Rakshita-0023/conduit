@@ -3,6 +3,7 @@
 /conduit.yaml
 /conduit-audit.jsonl
 /coverage.out
+/dist/
 
 # OS metadata
 .DS_Store

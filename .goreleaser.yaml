@@ -1,0 +1,75 @@
+# yaml-language-server: $schema=https://goreleaser.com/static/schema.json
+version: 2
+project_name: conduit
+
+builds:
+  - id: conduit
+    main: ./cmd/conduit
+    binary: conduit
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    # The dependency graph has no CGO sources. Disable CGO for portable,
+    # self-contained release binaries.
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+archives:
+  - id: conduit
+    ids:
+      - conduit
+    formats:
+      - tar.gz
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    builds_info:
+      mtime: "{{ .CommitDate }}"
+    # Explicitly include only public distribution material; configuration,
+    # audit, source, and local files are not release archive contents.
+    files:
+      - src: LICENSE
+        info:
+          mtime: "{{ .CommitDate }}"
+      - src: README.md
+        info:
+          mtime: "{{ .CommitDate }}"
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+# Publish only the binary archives and checksum manifest; source remains in Git.
+source:
+  enabled: false
+
+release:
+  github:
+    owner: Rakshita-0023
+    name: conduit
+
+# GoReleaser v2.10+ Casks install prebuilt archives; do not use deprecated
+# `brews` formula publishing for these binaries.
+homebrew_casks:
+  - name: conduit
+    ids:
+      - conduit
+    repository:
+      owner: Rakshita-0023
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    directory: Casks
+    homepage: https://github.com/Rakshita-0023/conduit
+    description: Federate downstream MCP servers behind one controlled MCP endpoint
+    binaries:
+      - conduit
+    skip_upload: auto
+    commit_author:
+      name: github-actions[bot]
+      email: 41898282+github-actions[bot]@users.noreply.github.com

@@ -21,6 +21,37 @@ See [COMPATIBILITY.md](COMPATIBILITY.md) for the exact protocol profile and [doc
 
 Requires Go 1.25 or newer.
 
+### Release binaries
+
+Download the archive for your operating system and architecture plus
+`checksums.txt` from the [GitHub Releases](https://github.com/Rakshita-0023/conduit/releases)
+page. Verify the archive checksum before extracting it; release archives contain
+only the `conduit` executable, README, and LICENSE. Create `conduit.yaml` from
+[config.example.yaml](config.example.yaml) before running the binary.
+
+```sh
+archive="conduit_0.1.1_darwin_arm64.tar.gz"
+checksum=$(awk -v archive="$archive" '$2 == archive { count++; line=$0 } END { if (count != 1) exit 1; print line }' checksums.txt) &&
+  printf '%s\n' "$checksum" | shasum -a 256 -c -
+tar -xzf "$archive"
+./conduit -config conduit.yaml
+```
+
+Replace the example archive name with the version and target you downloaded.
+
+### Homebrew
+
+Install the prebuilt macOS binary from the Conduit tap:
+
+```sh
+brew install --cask Rakshita-0023/tap/conduit
+```
+
+This cask provides `conduit` on `PATH`. It is not published as plain
+`brew install conduit`.
+
+### Build from source
+
 ```sh
 git clone https://github.com/Rakshita-0023/conduit.git
 cd conduit
@@ -31,6 +62,19 @@ go build -o conduit ./cmd/conduit
 ```
 
 For development, `go run ./cmd/conduit -config conduit.yaml` is equivalent. The listener is intentionally restricted to loopback addresses; put any network-facing termination or access control in front of it.
+
+### Upgrade
+
+For Homebrew installations, run:
+
+```sh
+brew update
+brew upgrade --cask Rakshita-0023/tap/conduit
+```
+
+For a release-binary installation, download and verify the newer matching
+archive, then replace the existing executable. Source installations upgrade by
+pulling the desired tag and rebuilding.
 
 `config.example.yaml` contains every current required setting. This minimal shape is sufficient for local use:
 
@@ -107,3 +151,12 @@ go vet ./...
 go test -race ./... -count=1 -timeout 90s
 git diff --check
 ```
+
+## Release maintainers
+
+Tag pushes matching `v*` publish release archives and update the Homebrew tap.
+Before the first automated release, create the `HOMEBREW_TAP_TOKEN` Actions
+secret in `Rakshita-0023/conduit`. It must be a fine-grained GitHub personal
+access token restricted to `Rakshita-0023/homebrew-tap` with **Contents: Read
+and write** permission. No Conduit repository permission is needed for that
+token; the workflow's scoped `GITHUB_TOKEN` publishes the GitHub Release.
