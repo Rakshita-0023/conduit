@@ -71,4 +71,7 @@ jobs:
       - name: Attest release artifacts
         uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2.3.0
         with:
-          subject-path: dist/*
+          subject-path: |
+            dist/*.tar.gz
+            dist/*.tar.gz.sbom.json
+            dist/checksums.txt
