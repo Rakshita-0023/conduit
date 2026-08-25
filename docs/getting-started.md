@@ -6,7 +6,8 @@ version declared in `go.mod` when built from source.
 
 ## Install
 
-Download a signed release archive from GitHub Releases, install the macOS cask
+Download a release archive and verify it with the published SHA-256 checksum,
+install the macOS cask
 with `brew install --cask Rakshita-0023/tap/conduit`, or build from source:
 
 ```sh
