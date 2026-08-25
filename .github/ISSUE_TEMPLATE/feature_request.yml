@@ -1,0 +1,29 @@
+name: Feature request
+description: Propose a focused improvement to Conduit
+title: "feat: "
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Check COMPATIBILITY.md first. Requests outside the deliberate v0.1
+        protocol profile may be better discussed as future-scope proposals.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What concrete user or operator problem does this solve?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Describe the public behavior, compatibility impact, and safety implications.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Include configuration or workflow alternatives where applicable.
