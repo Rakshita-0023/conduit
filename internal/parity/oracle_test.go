@@ -142,12 +142,18 @@ func newMockDownstream(def scenarioDownstream) *mockDownstream {
 }
 
 func newLoopbackServer(handler http.Handler) *httptest.Server {
-	server := httptest.NewUnstartedServer(handler)
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		panic(err)
 	}
-	server.Listener = listener
+	// NewUnstartedServer creates its own listener before callers can replace it.
+	// Build the test server directly so every oracle server is explicitly IPv4
+	// loopback, including on hosts where httptest chooses an unavailable IPv6
+	// listener.
+	server := &httptest.Server{
+		Listener: listener,
+		Config:   &http.Server{Handler: handler},
+	}
 	server.Start()
 	return server
 }
