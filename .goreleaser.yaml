@@ -50,9 +50,18 @@ source:
   enabled: false
 
 release:
+  # Release Please creates the versioned GitHub release first. GoReleaser
+  # appends verified binaries and metadata to that release.
+  mode: append
   github:
     owner: Rakshita-0023
     name: conduit
+
+# Syft produces one SPDX SBOM for each distributable archive. The release
+# workflow installs Syft before invoking GoReleaser.
+sboms:
+  - id: archives
+    artifacts: archive
 
 # GoReleaser v2.10+ Casks install prebuilt archives; do not use deprecated
 # `brews` formula publishing for these binaries.

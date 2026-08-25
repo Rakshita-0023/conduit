@@ -14,6 +14,11 @@ Release automation creates archives, SHA-256 checksums, an SBOM, provenance
 attestation, and a GitHub Release. Supported binary targets are Linux and
 macOS on amd64 and arm64. Windows is not currently a supported release target.
 
+On every merge to `main`, Release Please opens or updates a release PR from
+Conventional Commit history. Merging that PR creates the immutable tag and
+GitHub Release; the same workflow then runs the test suite and appends the
+GoReleaser archives, checksums, SBOMs, attestations, and Homebrew cask update.
+
 After a tag is indexed, module users can install it with:
 
 ```sh
