@@ -1,19 +1,19 @@
 # Getting started
 
 Conduit provides one local MCP endpoint that federates configured downstream
-Streamable HTTP MCP servers. It is a Go binary today and requires the Go
-version declared in `go.mod` when built from source.
+Streamable HTTP MCP servers. It requires Python 3.11 or newer.
 
 ## Install
 
-Download a release archive and verify it with the published SHA-256 checksum,
-install the macOS cask
-with `brew install --cask Rakshita-0023/tap/conduit`, or build from source:
+Install the published package with `pipx install conduit-gateway`, or build
+from source:
 
 ```sh
 git clone https://github.com/Rakshita-0023/conduit.git
 cd conduit
-go build -o conduit ./cmd/conduit
+python -m venv .venv
+. .venv/bin/activate
+python -m pip install -e .
 ```
 
 ## Configure and start
@@ -21,8 +21,8 @@ go build -o conduit ./cmd/conduit
 Copy the example, set each downstream URL and its policy, then start Conduit:
 
 ```sh
-cp config.example.yaml conduit.yaml
-./conduit -config conduit.yaml
+cp conduit.example.yaml conduit.yaml
+conduit --config conduit.yaml
 ```
 
 The listener must be loopback-only. On first start Conduit refreshes every
@@ -39,8 +39,7 @@ curl -sS http://127.0.0.1:8080/status
 
 Use a Streamable HTTP MCP client with protocol version `2026-07-28`. Requests
 must include matching `MCP-Protocol-Version`, `Mcp-Method`, JSON-RPC method,
-and `_meta` protocol metadata. See [README.md](../README.md#endpoints-and-mcp-calls)
-for complete `curl` examples.
+and `_meta` protocol metadata.
 
 Conduit publishes tools as `<downstream-id>.<tool-name>`, such as
 `github.search_code`; those public names are policy-filtered and do not need to

@@ -21,5 +21,5 @@ identity system, OAuth broker, approval service, or general HTTP proxy.
 
 Protect audit files and downstream configuration. Use least-privilege
 downstream credentials, one downstream header map per downstream, and a local
-edge proxy if network exposure is needed. See [SECURITY.md](../SECURITY.md)
+edge proxy if network exposure is needed. See the repository's `SECURITY.md`
 for vulnerability reporting.

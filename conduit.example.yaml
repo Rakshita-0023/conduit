@@ -1,0 +1,24 @@
+# Local loopback listener. Non-loopback hosts are rejected.
+listener:
+  address: 127.0.0.1:8080
+  allowed_origins: []
+audit:
+  path: ./conduit-audit.jsonl
+policy:
+  allow: ["github.*"]
+  deny: []
+limits:
+  max_pages_per_downstream: 32
+  max_tools_per_downstream: 256
+  max_downstream_catalog_bytes: 1048576
+  max_aggregate_tools: 512
+  max_aggregate_response_bytes: 4194304
+  max_tool_response_bytes: 4194304
+  catalog_refresh_interval: 60s
+  request_timeout: 10s
+  tool_call_timeout: 30s
+downstreams:
+  - id: github
+    url: http://127.0.0.1:9000/mcp
+    # Only credentials owned by this downstream belong here.
+    headers: {}

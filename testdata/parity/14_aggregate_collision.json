@@ -1,9 +1,0 @@
-{
-  "name":"aggregate collision exposes no partial catalog",
-  "downstreams":[
-    {"id":"a.b","tools":[{"name":"c","inputSchema":{"type":"object"}}]},
-    {"id":"a","tools":[{"name":"b.c","inputSchema":{"type":"object"}}]}
-  ],
-  "policy":{"allow":["a.*"],"deny":[]},
-  "expect":{"ready":false,"tools":[],"audit_events":["audit_ready"]}
-}

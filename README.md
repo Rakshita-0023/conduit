@@ -1,90 +1,59 @@
 # Conduit
 
-Conduit exposes one MCP endpoint that federates multiple downstream MCP servers with deterministic discovery and controlled execution.
+[![CI](https://github.com/Rakshita-0023/conduit/actions/workflows/ci.yml/badge.svg)](https://github.com/Rakshita-0023/conduit/actions/workflows/ci.yml)
 
-It gives an MCP client a single local endpoint while keeping tool discovery, routing, policy enforcement, credentials, and audit ownership in one place. Conduit v0.1 is an infrastructure gateway, not a general MCP proxy.
+Conduit is a deterministic, local-first MCP gateway that federates tools from
+multiple Streamable HTTP servers behind one policy-enforced and auditable
+endpoint.
 
-## v0.1 scope
+It presents one MCP 2026-07-28 endpoint, publishes stable names such as
+`github.search_code`, and routes an authorised call only through its stored
+downstream route. It is deliberately not a general-purpose MCP proxy.
 
-Conduit supports MCP **2026-07-28** over Streamable HTTP. Downstreams are Streamable HTTP endpoints only. Conduit discovers their tools, publishes deterministic namespaced names such as `github.search_code`, filters them through policy, and dispatches an authorized `tools/call` only to its exact stored downstream route.
+## Install
 
-- `server/discover`, `tools/list`, and terminal JSON `tools/call` are supported.
-- A durable `tool_call_authorized` audit record is written before downstream transport starts.
-- Tool calls are never automatically retried or replayed. Once transport may have started, failures are reported conservatively as uncertain-after-dispatch where appropriate.
-- Caller credentials and caller-supplied headers are not forwarded. Downstream-owned credentials belong in the configured downstream headers.
-- A downstream-created Streamable HTTP session is owned per invocation and receives one bounded cleanup `DELETE`; stateless calls receive none.
-- Readiness is true only when Conduit is live, its audit log is available, the aggregate is usable, every configured downstream has completed an initial refresh, and at least one downstream is healthy. Otherwise `/mcp` discovery/list/execution is degraded with a not-ready response while health remains inspectable.
-
-See [COMPATIBILITY.md](COMPATIBILITY.md) for the exact protocol profile and [docs/architecture.md](docs/architecture.md) for the implemented execution model.
-
-## Install and run
-
-Requires Go 1.25 or newer.
-
-### Release binaries
-
-Download the archive for your operating system and architecture plus
-`checksums.txt` from the [GitHub Releases](https://github.com/Rakshita-0023/conduit/releases)
-page. Verify the archive checksum before extracting it; release archives contain
-only the `conduit` executable, README, and LICENSE. Create `conduit.yaml` from
-[config.example.yaml](config.example.yaml) before running the binary.
+The Python distribution name is **`conduit-gateway`** (the import and command
+remain `conduit`). After the v0.2.0 release is published:
 
 ```sh
-archive="conduit_0.1.1_darwin_arm64.tar.gz"
-checksum=$(awk -v archive="$archive" '$2 == archive { count++; line=$0 } END { if (count != 1) exit 1; print line }' checksums.txt) &&
-  printf '%s\n' "$checksum" | shasum -a 256 -c -
-tar -xzf "$archive"
-./conduit -config conduit.yaml
+pipx install conduit-gateway
+# or: python -m pip install conduit-gateway
 ```
 
-Replace the example archive name with the version and target you downloaded.
-
-### Homebrew
-
-Install the prebuilt macOS binary from the Conduit tap:
+Until publication, install a checkout for local development:
 
 ```sh
-brew install --cask Rakshita-0023/tap/conduit
+python -m venv .venv
+. .venv/bin/activate
+python -m pip install -e '.[test]'
 ```
 
-This cask provides `conduit` on `PATH`. It is not published as plain
-`brew install conduit`.
+The Go v0.1.x releases remain available through their existing release tags and
+the `go-v0.1-maintenance` branch; this branch is the Python implementation.
 
-### Build from source
+## Quick start
 
 ```sh
-git clone https://github.com/Rakshita-0023/conduit.git
-cd conduit
-cp config.example.yaml conduit.yaml
-# Edit conduit.yaml: set downstream URLs, credentials, and policy.
-go build -o conduit ./cmd/conduit
-./conduit -config conduit.yaml
+cp conduit.example.yaml conduit.yaml
+# Edit the downstream URL, its owned credentials, and policy rules.
+conduit --config conduit.yaml
 ```
 
-For development, `go run ./cmd/conduit -config conduit.yaml` is equivalent. The listener is intentionally restricted to loopback addresses; put any network-facing termination or access control in front of it.
-
-### Upgrade
-
-For Homebrew installations, run:
+Conduit binds loopback addresses only. Once its downstream catalog is ready:
 
 ```sh
-brew update
-brew upgrade --cask Rakshita-0023/tap/conduit
+curl http://127.0.0.1:8080/healthz
 ```
-
-For a release-binary installation, download and verify the newer matching
-archive, then replace the existing executable. Source installations upgrade by
-pulling the desired tag and rebuilding.
-
-`config.example.yaml` contains every current required setting. This minimal shape is sufficient for local use:
 
 ```yaml
 listener:
   address: 127.0.0.1:8080
+  allowed_origins: []
 audit:
   path: ./conduit-audit.jsonl
 policy:
   allow: ["github.*"]
+  deny: []
 limits:
   max_pages_per_downstream: 32
   max_tools_per_downstream: 256
@@ -101,62 +70,41 @@ downstreams:
     headers: {}
 ```
 
-Configuration parsing is strict: unknown fields and invalid values fail startup. Do not place client credentials in this file; `downstreams[].headers` is only for credentials owned by that downstream.
+## Scope and safety model
 
-## Endpoints and MCP calls
+Conduit supports `server/discover`, deterministic policy-filtered `tools/list`,
+and terminal JSON `tools/call` over MCP **2026-07-28**. Downstreams are
+Streamable HTTP only. It has no automatic tool-call retries, legacy fallback,
+stdio, OAuth broker, identity system, database, dashboard, or SSE/progress
+bridge.
 
-- `GET /healthz` returns liveness/readiness.
-- `GET /status` returns sanitized aggregate and downstream refresh status.
-- `POST /mcp` is the MCP endpoint.
+Every public tool has an explicit immutable route. Policy is deny-wins, then
+allow, then default-deny. A durable `tool_call_authorized` audit entry is
+fsynced before downstream side effects. Caller headers, cookies, and
+credentials are never forwarded; configured downstream headers are isolated per
+server. Redirects are disabled, response bodies are bounded while streaming,
+and downstream sessions receive a single invocation-owned cleanup `DELETE`.
 
-MCP requests require the 2026-07-28 protocol metadata and matching transport headers. For example, after Conduit is ready:
-
-```sh
-curl -sS http://127.0.0.1:8080/mcp \
-  -H 'Content-Type: application/json' \
-  -H 'Accept: application/json, text/event-stream' \
-  -H 'MCP-Protocol-Version: 2026-07-28' \
-  -H 'Mcp-Method: server/discover' \
-  --data '{"jsonrpc":"2.0","id":1,"method":"server/discover","params":{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}'
+```mermaid
+flowchart LR
+  C[MCP client] --> I[Conduit ingress]
+  I --> R[Immutable registry + policy]
+  R --> A[Durable audit]
+  A --> D[One-shot dispatcher]
+  D --> S[Exact downstream MCP route]
 ```
 
-Use `Mcp-Method: tools/list` with method `tools/list` to obtain the policy-filtered aggregate. A tool call additionally carries its public name in `Mcp-Name`:
+Read [the documentation](https://rakshita-0023.github.io/conduit/) for
+configuration, operations, protocol compatibility, security, and development.
+
+## Development
 
 ```sh
-curl -sS http://127.0.0.1:8080/mcp \
-  -H 'Content-Type: application/json' \
-  -H 'Accept: application/json, text/event-stream' \
-  -H 'MCP-Protocol-Version: 2026-07-28' \
-  -H 'Mcp-Method: tools/call' \
-  -H 'Mcp-Name: github.search_code' \
-  --data '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"github.search_code","arguments":{},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}'
+python -m pytest --cov
+ruff check .
+mypy src
+python -m build
 ```
 
-## Security model
-
-Conduit is a policy and routing boundary, not an identity system. Policy allow/deny rules control the names exposed in `tools/list` and are rechecked during authorization. Routes are stored from the discovered aggregate, so Conduit does not split public names to reconstruct a route. The registry lock is released before network I/O; authorization is linearized with the generation that produced the route and a durable audit write.
-
-Configured downstream headers may provide downstream credentials, but protected MCP routing/session headers cannot be configured. Client headers, cookies, origin, and credentials are not propagated downstream. Redirects are disabled. Audit and status output omit configured credential values.
-
-## Limitations
-
-v0.1 deliberately does not support stdio, OAuth brokerage, identity/users, approvals, a database, dashboard, legacy MCP, prompts, resources, tasks, subscriptions, or request-scoped SSE/progress bridging. SSE/progress from a downstream tool call is rejected rather than silently dropped. There is no legacy fallback.
-
-## Test
-
-```sh
-gofmt -w $(rg --files -g '*.go')
-go test ./... -count=1 -timeout 60s
-go vet ./...
-go test -race ./... -count=1 -timeout 90s
-git diff --check
-```
-
-## Release maintainers
-
-Tag pushes matching `v*` publish release archives and update the Homebrew tap.
-Before the first automated release, create the `HOMEBREW_TAP_TOKEN` Actions
-secret in `Rakshita-0023/conduit`. It must be a fine-grained GitHub personal
-access token restricted to `Rakshita-0023/homebrew-tap` with **Contents: Read
-and write** permission. No Conduit repository permission is needed for that
-token; the workflow's scoped `GITHUB_TOKEN` publishes the GitHub Release.
+See [CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md), and the
+[Apache-2.0 license](LICENSE).

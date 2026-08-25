@@ -1,8 +1,8 @@
 # Contributing to Conduit
 
-Thank you for improving Conduit. The released Go implementation is the
-current production runtime; work in `python/` is an explicitly temporary
-migration workspace and must not change the Go v0.1.x behavior accidentally.
+Thank you for improving Conduit. The active implementation is Python. The
+released Go v0.1.x runtime is preserved by its release tags and the
+`go-v0.1-maintenance` branch.
 
 ## Before opening a change
 
@@ -16,16 +16,16 @@ migration workspace and must not change the Go v0.1.x behavior accidentally.
 
 ## Development checks
 
-Conduit requires the Go version declared in `go.mod`.
+Conduit requires Python 3.11 or newer.
 
 ```sh
-go mod tidy
-go mod verify
-gofmt -w $(rg --files -g '*.go')
-go vet ./...
-go test ./... -count=1 -timeout 60s
-go test -race ./... -count=1 -timeout 90s
-go build ./...
+python -m pip install -e '.[test,docs,release]'
+python -m pytest --cov
+ruff check .
+mypy src
+python -m pip_audit
+python -m build
+mkdocs build --strict
 git diff --check
 ```
 

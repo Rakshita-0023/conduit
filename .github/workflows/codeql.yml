@@ -13,23 +13,15 @@ permissions:
 
 jobs:
   analyze:
-    name: Analyze Go
+    name: Analyze Python
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - name: Check out repository
-        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
-
-      - name: Initialize CodeQL
-        uses: github/codeql-action/init@4c0873ef8656cb3c50b3f42fb63bc1ade0cfa827 # v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: github/codeql-action/init@4c0873ef8656cb3c50b3f42fb63bc1ade0cfa827 # v4
         with:
-          languages: go
-          build-mode: autobuild
-
-      - name: Build
-        uses: github/codeql-action/autobuild@4c0873ef8656cb3c50b3f42fb63bc1ade0cfa827 # v4
-
-      - name: Analyze
-        uses: github/codeql-action/analyze@4c0873ef8656cb3c50b3f42fb63bc1ade0cfa827 # v4
+          languages: python
+          build-mode: none
+      - uses: github/codeql-action/analyze@4c0873ef8656cb3c50b3f42fb63bc1ade0cfa827 # v4
         with:
-          category: "/language:go"
+          category: /language:python
