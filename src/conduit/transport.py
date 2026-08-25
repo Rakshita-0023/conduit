@@ -100,13 +100,21 @@ async def read_bounded(response: httpx.Response, limit: int) -> bytes:
 
     retained = bytearray()
     maximum = limit + 1
-    async for chunk in response.aiter_bytes():
-        remaining = maximum - len(retained)
-        if remaining <= 0:
-            raise ResponseTooLarge("downstream response exceeds byte limit")
-        retained.extend(chunk[:remaining])
-        if len(chunk) > remaining or len(retained) > limit:
-            raise ResponseTooLarge("downstream response exceeds byte limit")
+    chunks = response.aiter_bytes()
+    try:
+        async for chunk in chunks:
+            remaining = maximum - len(retained)
+            if remaining <= 0:
+                raise ResponseTooLarge("downstream response exceeds byte limit")
+            retained.extend(chunk[:remaining])
+            if len(chunk) > remaining or len(retained) > limit:
+                raise ResponseTooLarge("downstream response exceeds byte limit")
+    finally:
+        # Overflow deliberately stops consuming the stream. Close the async
+        # iterator now rather than relying on eventual garbage collection.
+        close_iterator = getattr(chunks, "aclose", None)
+        if close_iterator is not None:
+            await close_iterator()
     return bytes(retained)
 
 
