@@ -27,8 +27,8 @@ jobs:
           python-version: "3.13"
       - run: python -m pip install '.[docs]'
       - run: mkdocs build --strict
-      - uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6c7f71f26328a # v3
+      - uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3
         with:
           path: site
       - id: deployment
-        uses: actions/deploy-pages@d6db4e5c8f3fb0a7fb3a497d9c15fc7e798f4560 # v4
+        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4
