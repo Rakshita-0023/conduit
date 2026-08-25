@@ -1,0 +1,36 @@
+name: Bug report
+description: Report a reproducible problem with Conduit
+title: "bug: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not include credentials, private downstream URLs, or audit-log data.
+        For a security issue, use private vulnerability reporting instead.
+  - type: input
+    id: version
+    attributes:
+      label: Conduit version
+      description: Include the release tag or commit.
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: OS, architecture, Go version, and installation method.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Reproduction
+      description: Minimal safe steps, configuration shape, expected behavior, and actual behavior.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Sanitized logs or status output
+      description: Remove credentials, session IDs, private endpoints, and audit content.

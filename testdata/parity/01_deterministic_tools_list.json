@@ -1,0 +1,9 @@
+{
+  "name": "deterministic tools/list ordering",
+  "downstreams": [
+    {"id":"postgres","tools":[{"name":"query","inputSchema":{"type":"object"}}]},
+    {"id":"github","tools":[{"name":"search","inputSchema":{"type":"object"}},{"name":"create","inputSchema":{"type":"object"}}]}
+  ],
+  "policy":{"allow":["github.*","postgres.*"],"deny":[]},
+  "expect":{"ready":true,"tools":["github.create","github.search","postgres.query"],"audit_events":["audit_ready"]}
+}

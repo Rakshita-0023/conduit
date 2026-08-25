@@ -2,13 +2,13 @@
 
 Conduit implements a narrow federation path:
 
-```text
-MCP client
-  -> ingress
-  -> registry and policy
-  -> authorization audit boundary
-  -> dispatcher
-  -> downstream MCP server
+```mermaid
+flowchart LR
+    C[MCP client] --> I[Ingress]
+    I --> R[Immutable registry + policy]
+    R --> A[Durable authorization audit]
+    A --> D[Dispatcher]
+    D --> M[Downstream Streamable HTTP MCP]
 ```
 
 Ingress accepts MCP 2026-07-28 on the local Streamable HTTP endpoint. It serves `server/discover`, the published aggregate for `tools/list`, and hands `tools/call` to the dispatcher. It does not forward the client request as a general proxy request.

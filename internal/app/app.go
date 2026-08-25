@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 
@@ -146,14 +147,14 @@ func (a *App) Close(ctx context.Context) error {
 		a.testAfterDispatchShutdownAdmission()
 	}
 	var e error
-	if le := a.Listener.Close(); le != nil && !errors.Is(le, net.ErrClosed) {
+	if le := a.Listener.Close(); le != nil && !isExpectedListenerClose(le) {
 		e = fmt.Errorf("close listener: %w", le)
 	}
 	// Server.Shutdown does not cancel active requests when its deadline expires.
 	// Dispatcher-owned cancellation does, and Wait keeps audit storage alive
 	// through every active invocation's terminal audit path.
 	a.Dispatcher.CancelActive()
-	if se := a.Server.Shutdown(ctx); se != nil && e == nil {
+	if se := a.Server.Shutdown(ctx); se != nil && !isExpectedListenerClose(se) && e == nil {
 		e = se
 	}
 	select {
@@ -172,4 +173,12 @@ func (a *App) Close(ctx context.Context) error {
 		return fmt.Errorf("close audit: %w", ae)
 	}
 	return nil
+}
+
+func isExpectedListenerClose(err error) bool {
+	if err == nil || errors.Is(err, net.ErrClosed) {
+		return true
+	}
+	var opErr *net.OpError
+	return errors.As(err, &opErr) && opErr.Op == "close" && strings.Contains(opErr.Err.Error(), "use of closed network connection")
 }

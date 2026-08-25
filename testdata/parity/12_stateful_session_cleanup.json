@@ -1,0 +1,16 @@
+{
+  "name":"stateful downstream session receives one cleanup delete",
+  "downstreams":[{"id":"github","tools":[{"name":"search","inputSchema":{"type":"object"}}],
+    "call_response":{"kind":"result","session_id":"owned-session","result":{"content":[{"type":"text","text":"ok"}]}}}],
+  "policy":{"allow":["github.*"],"deny":[]},
+  "call":{"name":"github.search","arguments":{}},
+  "expect":{
+    "ready":true,"tools":["github.search"],
+    "call":{"status":200,"result":{"content":[{"text":"ok","type":"text"}]}},
+    "downstream":[
+      {"id":"github","method":"POST","mcp_method":"tools/call","count":1,"tool_name":"search","headers":{"Mcp-Session-Id":""}},
+      {"id":"github","method":"DELETE","session_id":"owned-session","count":1}
+    ],
+    "audit_events":["audit_ready","tool_call_authorized","tool_call_completed"]
+  }
+}
