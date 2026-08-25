@@ -19,7 +19,7 @@ body:
     id: environment
     attributes:
       label: Environment
-      description: OS, architecture, Go version, and installation method.
+      description: OS, Python version, Conduit version, and installation method.
     validations:
       required: true
   - type: textarea

@@ -1,9 +1,19 @@
-# Local build and runtime artifacts
-/conduit
-/conduit.yaml
-/conduit-audit.jsonl
-/coverage.out
-/dist/
+# Python builds, environments, test output, and local runtime files
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+dist/
+build/
+site/
+*.egg-info/
+conduit.yaml
+conduit-audit.jsonl
 
 # OS metadata
 .DS_Store

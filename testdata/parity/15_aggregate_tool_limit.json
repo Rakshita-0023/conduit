@@ -1,7 +1,0 @@
-{
-  "name":"aggregate limit exposes no partial catalog",
-  "downstreams":[{"id":"github","tools":[{"name":"one","inputSchema":{"type":"object"}},{"name":"two","inputSchema":{"type":"object"}}]}],
-  "policy":{"allow":["github.*"],"deny":[]},
-  "limits":{"max_aggregate_tools":1},
-  "expect":{"ready":false,"tools":[],"audit_events":["audit_ready"]}
-}

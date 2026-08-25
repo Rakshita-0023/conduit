@@ -2,7 +2,7 @@
 
 Conduit loads one strict YAML document. Unknown fields, invalid types, invalid
 policy rules, invalid origins, non-loopback listeners, and invalid downstream
-URLs fail startup. Start from [config.example.yaml](../config.example.yaml).
+URLs fail startup. Start from the repository's `conduit.example.yaml`.
 
 ## Top-level fields
 
