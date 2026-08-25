@@ -117,6 +117,15 @@ func TestStartRejectsCanceledContext(t *testing.T) {
 	}
 }
 
+func TestExpectedListenerClose(t *testing.T) {
+	if !isExpectedListenerClose(&net.OpError{Op: "close", Net: "tcp", Err: errors.New("use of closed network connection")}) {
+		t.Fatal("expected legacy listener-close error to be accepted")
+	}
+	if isExpectedListenerClose(errors.New("unexpected close failure")) {
+		t.Fatal("unexpected close failure was accepted")
+	}
+}
+
 func TestCloseCancelsRefreshAndReadiness(t *testing.T) {
 	started := make(chan struct{})
 	release := make(chan struct{})

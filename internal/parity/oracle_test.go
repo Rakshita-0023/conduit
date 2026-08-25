@@ -308,7 +308,7 @@ func runScenario(t *testing.T, fixture scenario) observation {
 		if err := instance.Close(context.Background()); err != nil {
 			t.Error(err)
 		}
-		if err := <-serveErr; err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
+		if err := <-serveErr; !isExpectedServerClose(err) {
 			t.Error(err)
 		}
 	}()
@@ -328,12 +328,23 @@ func runScenario(t *testing.T, fixture scenario) observation {
 	if err := instance.Close(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if err := <-serveErr; err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
+	if err := <-serveErr; !isExpectedServerClose(err) {
 		t.Fatal(err)
 	}
 	closed = true
 	out.Audit = readAudit(t, cfg.Audit.Path)
 	return out
+}
+
+func isExpectedServerClose(err error) bool {
+	if err == nil || errors.Is(err, http.ErrServerClosed) || errors.Is(err, net.ErrClosed) {
+		return true
+	}
+	// http.Server can return this platform-specific listener-close error when
+	// direct listener closure wins the race with Shutdown marking the server as
+	// closed. The oracle controls that listener and has already completed a
+	// successful App.Close, so it is a normal test-server teardown outcome.
+	return strings.Contains(err.Error(), "use of closed network connection")
 }
 
 func waitForInitialRefresh(t *testing.T, baseURL string, downstreams int) map[string]any {
