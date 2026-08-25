@@ -39,7 +39,7 @@ jobs:
 
       - name: Verify formatting
         run: |
-          unformatted="$(gofmt -l $(git ls-files '*.go'))"
+          unformatted="$(git ls-files -z '*.go' | xargs -0 gofmt -l)"
           test -z "$unformatted" || { echo "$unformatted"; exit 1; }
 
       - name: Vet
