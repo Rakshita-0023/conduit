@@ -26,7 +26,7 @@ jobs:
       - uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
         with:
           subject-path: dist/*
-      - uses: pypa/gh-action-pypi-publish@ed0c53930ec7c2dffb3f1624b391f57b7d0970dc # v1
-      - uses: softprops/action-gh-release@6cbd405e6b9a013e02cd4bf5a7f64b8cc8d3a764 # v2
+      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1
+      - uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v2
         with:
           files: dist/*
