@@ -27,5 +27,5 @@ accepted; `null`, non-loopback, and malformed origins are rejected.
 
 ## Downstream progress/SSE response
 
-Request-scoped downstream SSE/progress is intentionally unsupported in v0.1.
+Request-scoped downstream SSE/progress is intentionally unsupported in v0.2.
 Conduit rejects it conservatively and cleans up any invocation-owned session.

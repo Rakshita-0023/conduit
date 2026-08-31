@@ -10,13 +10,13 @@ Use Conventional Commits for release classification:
 - `feat:` creates a minor release; and
 - `!` or `BREAKING CHANGE:` marks a breaking change.
 
-Release automation builds a wheel and source distribution, checks them, creates
-an SBOM and provenance attestation where GitHub supports them, publishes to
-PyPI using OIDC, and creates a GitHub Release.
+Release automation builds a wheel and source distribution, checks them, runs
+the project security and documentation checks, creates a build provenance
+attestation where GitHub supports it, publishes to PyPI using OIDC, and creates
+a GitHub Release. It does not currently generate an SBOM automatically.
 
-On every merge to `main`, Release Please opens or updates a release PR from
-Conventional Commit history. Merging that PR creates the immutable tag and
-triggers the package release workflow. Users install it with:
+Maintainers create an immutable semantic tag from validated `main`; pushing
+that tag triggers the package release workflow. Users install it with:
 
 ```sh
 pipx install conduit-gateway

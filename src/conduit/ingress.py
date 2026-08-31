@@ -99,7 +99,7 @@ async def _tools_call(runtime: "Runtime", request: Request, raw_id: str, params:
     if not runtime.health.snapshot()["ready"]:
         return PlainTextResponse("conduit not ready\n", status_code=503)
     try:
-        reply = await runtime.dispatcher.execute(name, arguments, params.get("inputResponses"), params.get("requestState"))
+        reply = await runtime.dispatcher.execute(name, arguments, params.get("inputResponses"), params.get("requestState"), request.headers)
     except Exception as exc:
         from .errors import GatewayError
 

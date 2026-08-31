@@ -13,14 +13,14 @@ downstream route. It is deliberately not a general-purpose MCP proxy.
 ## Install
 
 The Python distribution name is **`conduit-gateway`** (the import and command
-remain `conduit`). After the v0.2.0 release is published:
+remain `conduit`):
 
 ```sh
 pipx install conduit-gateway
 # or: python -m pip install conduit-gateway
 ```
 
-Until publication, install a checkout for local development:
+For local development from a checkout:
 
 ```sh
 python -m venv .venv
@@ -34,10 +34,13 @@ the `go-v0.1-maintenance` branch; this branch is the Python implementation.
 ## Quick start
 
 ```sh
-cp conduit.example.yaml conduit.yaml
+conduit --init --config conduit.yaml
 # Edit the downstream URL, its owned credentials, and policy rules.
 conduit --config conduit.yaml
 ```
+
+`--init` writes the bundled template privately and never overwrites an existing
+configuration. Checkout users may also copy the root `conduit.example.yaml`.
 
 Conduit binds loopback addresses only. Once its downstream catalog is ready:
 

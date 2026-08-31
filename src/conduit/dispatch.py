@@ -24,7 +24,7 @@ from .errors import (
     ResponseTooLarge,
     UnsupportedResponse,
 )
-from .headers import HeaderError, generate_headers
+from .headers import HeaderError, generate_headers, validate_call_headers
 from .health import HealthState
 from .registry import PreparedRoute, Registry, RouteChanged, RouteDenied, RouteMissing
 from .transport import DownstreamTransport, parse_jsonrpc_reply
@@ -47,12 +47,19 @@ class Dispatcher:
         self._empty = asyncio.Event()
         self._empty.set()
 
-    async def execute(self, public_name: str, arguments: Mapping[str, Any], input_responses: object | None, request_state: object | None) -> dict[str, Any]:
+    async def execute(
+        self,
+        public_name: str,
+        arguments: Mapping[str, Any],
+        input_responses: object | None,
+        request_state: object | None,
+        request_headers: Mapping[str, str] | None = None,
+    ) -> dict[str, Any]:
         task = asyncio.current_task()
         if task is None or not await self._admit(task):
             raise GatewayError(TOOL_UNAVAILABLE, "tool unavailable")
         try:
-            return await self._execute(public_name, arguments, input_responses, request_state)
+            return await self._execute(public_name, arguments, input_responses, request_state, request_headers)
         finally:
             await self._release(task)
 
@@ -84,14 +91,21 @@ class Dispatcher:
             if not self._active:
                 self._empty.set()
 
-    async def _execute(self, public_name: str, arguments: Mapping[str, Any], input_responses: object | None, request_state: object | None) -> dict[str, Any]:
+    async def _execute(
+        self,
+        public_name: str,
+        arguments: Mapping[str, Any],
+        input_responses: object | None,
+        request_state: object | None,
+        request_headers: Mapping[str, str] | None,
+    ) -> dict[str, Any]:
         call_id = base64.urlsafe_b64encode(secrets.token_bytes(16)).decode().rstrip("=")
         if not self._audit.available:
             self._health.set_audit(False)
             raise GatewayError(AUDIT_UNAVAILABLE, "audit unavailable")
         if not self._health.snapshot()["ready"]:
             raise GatewayError(TOOL_UNAVAILABLE, "tool unavailable")
-        prepared = await self._prepare_and_authorize(call_id, public_name, arguments)
+        prepared = await self._prepare_and_authorize(call_id, public_name, arguments, request_headers)
         downstream = self._servers.get(prepared.route.server_id)
         if downstream is None:
             await self._terminal(call_id, prepared, "tool_call_downstream_error", "missing_server", 0)
@@ -158,11 +172,16 @@ class Dispatcher:
             if session_id:
                 await self._transport.cleanup(downstream.url, session_id, downstream.headers, self._config.limits.tool_call_timeout_seconds)
 
-    async def _prepare_and_authorize(self, call_id: str, name: str, arguments: Mapping[str, Any]) -> PreparedRoute:
+    async def _prepare_and_authorize(
+        self, call_id: str, name: str, arguments: Mapping[str, Any], request_headers: Mapping[str, str] | None
+    ) -> PreparedRoute:
         for _ in range(3):
             try:
                 prepared = await self._registry.prepare(name)
-                generate_headers(prepared.tool, arguments)
+                if request_headers is None:
+                    generate_headers(prepared.tool, arguments)
+                else:
+                    validate_call_headers(prepared.tool, name, arguments, request_headers)
                 await self._registry.authorize(prepared, lambda: self._authorized(call_id, prepared))
                 return prepared
             except RouteChanged:

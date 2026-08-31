@@ -13,10 +13,10 @@ class HeaderError(ValueError):
 
 
 def validate_call_headers(tool: Mapping[str, Any], public_name: str, arguments: Mapping[str, Any], headers: Mapping[str, str]) -> None:
-    if headers.get("mcp-name") != public_name:
+    lowered = {key.lower(): value for key, value in headers.items()}
+    if lowered.get("mcp-name") != public_name:
         raise HeaderError("Mcp-Name must match tool name")
     generated = generate_headers(tool, arguments)
-    lowered = {key.lower(): value for key, value in headers.items()}
     for key, expected in generated.items():
         actual = lowered.get(key.lower())
         if actual is None or not _equivalent(expected, _decode(actual)):

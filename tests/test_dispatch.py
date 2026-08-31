@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from dataclasses import replace
 from pathlib import Path
@@ -121,4 +122,28 @@ async def test_shutdown_rejects_new_dispatch_without_transport(config, tmp_path:
         await dispatcher.execute("example.run", {}, None, None)
     assert error.value.code == TOOL_UNAVAILABLE
     assert transport.calls == 0
+    await audit.close()
+
+
+@pytest.mark.asyncio
+async def test_shutdown_cancels_active_dispatch_as_unknown_after_dispatch(config, tmp_path: Path) -> None:
+    dispatcher, transport, audit = await _dispatcher(config, tmp_path, _reply({"content": []}))
+    started = asyncio.Event()
+    never = asyncio.Event()
+
+    async def blocking(*_: object, **__: object) -> DownstreamReply:
+        transport.calls += 1
+        started.set()
+        await never.wait()
+        raise AssertionError("blocking request unexpectedly resumed")
+
+    transport.request = blocking  # type: ignore[method-assign]
+    active = asyncio.create_task(dispatcher.execute("example.run", {}, None, None))
+    await started.wait()
+    await dispatcher.cancel_active()
+    with pytest.raises(GatewayError) as error:
+        await active
+    assert error.value.code == TOOL_OUTCOME_UNKNOWN
+    await dispatcher.wait()
+    assert "tool_call_unknown_after_dispatch" in (tmp_path / "audit.jsonl").read_text(encoding="utf-8")
     await audit.close()

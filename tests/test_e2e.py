@@ -84,6 +84,13 @@ def _downstreams(audit_path: Path) -> Iterator[tuple[_Downstream, _Downstream]]:
     github = _Downstream(
         [
             {"name": "search", "inputSchema": {"type": "object"}},
+            {
+                "name": "with_header",
+                "inputSchema": {
+                    "type": "object",
+                    "properties": {"token": {"type": "string", "x-mcp-header": "Token"}},
+                },
+            },
             {"name": "hidden", "inputSchema": {"type": "object"}},
         ],
         {"content": [{"type": "text", "text": "matched"}], "structuredContent": {"count": 1}, "_meta": {"source": "mock"}},
@@ -164,7 +171,7 @@ downstreams:
             assert discovered.json()["id"] == 1
 
             listed = client.post("/mcp", headers=_headers("tools/list"), json=_body("tools/list", 2))
-            assert [tool["name"] for tool in listed.json()["result"]["tools"]] == ["github.search", "misc.z"]
+            assert [tool["name"] for tool in listed.json()["result"]["tools"]] == ["github.search", "github.with_header", "misc.z"]
 
             called = client.post(
                 "/mcp",
@@ -184,8 +191,44 @@ downstreams:
             assert len(deletes) == 1
             assert {name.lower(): value for name, value in deletes[0][1].items()}["mcp-session-id"] == "owned-session"
 
+            valid_header = client.post(
+                "/mcp",
+                headers=_headers("tools/call", **{"Mcp-Name": "github.with_header", "Mcp-Param-Token": "alpha"}),
+                json=_body("tools/call", int(1e9), {"name": "github.with_header", "arguments": {"token": "alpha"}}),
+            )
+            assert valid_header.status_code == 200
+
+            missing_header = client.post(
+                "/mcp",
+                headers=_headers("tools/call", **{"Mcp-Name": "github.with_header"}),
+                json=_body("tools/call", 9007199254740993, {"name": "github.with_header", "arguments": {"token": "alpha"}}),
+            )
+            assert missing_header.json()["error"]["code"] == -32010
+            assert b'"id":9007199254740993,' in missing_header.content
+
+            conflicting_header = client.post(
+                "/mcp",
+                headers=_headers("tools/call", **{"Mcp-Name": "github.with_header", "Mcp-Param-Token": "beta"}),
+                json=_body("tools/call", 6, {"name": "github.with_header", "arguments": {"token": "alpha"}}),
+            )
+            assert conflicting_header.json()["error"]["code"] == -32010
+
+            malformed_header = client.post(
+                "/mcp",
+                headers=_headers("tools/call", **{"Mcp-Name": "github.with_header", "Mcp-Param-Token": "=?base64?%%%?="}),
+                json=_body("tools/call", 8, {"name": "github.with_header", "arguments": {"token": "alpha"}}),
+            )
+            assert malformed_header.json()["error"]["code"] == -32010
+
+            unexpected_header = client.post(
+                "/mcp",
+                headers=_headers("tools/call", **{"Mcp-Name": "github.with_header", "Mcp-Param-Other": "alpha", "Mcp-Param-Token": "alpha"}),
+                json=_body("tools/call", 7, {"name": "github.with_header", "arguments": {"token": "alpha"}}),
+            )
+            assert unexpected_header.json()["error"]["code"] == -32010
+
             denied = client.post("/mcp", headers=_headers("tools/call", **{"Mcp-Name": "github.hidden"}), json=_body("tools/call", 4, {"name": "github.hidden", "arguments": {}}))
             assert denied.json()["error"]["code"] == -32010
             unknown = client.post("/mcp", headers=_headers("tools/call", **{"Mcp-Name": "github.unknown"}), json=_body("tools/call", 5, {"name": "github.unknown", "arguments": {}}))
             assert unknown.json()["error"]["code"] == -32010
-            assert len([request for request in github.requests if request[0] == "POST" and request[2]["method"] == "tools/call"]) == 1
+            assert len([request for request in github.requests if request[0] == "POST" and request[2]["method"] == "tools/call"]) == 2
