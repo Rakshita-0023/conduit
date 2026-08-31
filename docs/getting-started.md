@@ -18,10 +18,66 @@ python -m pip install -e .
 
 ## Configure and start
 
-Copy the example, set each downstream URL and its policy, then start Conduit:
+Create the bundled template, set each downstream URL and its policy, then start
+Conduit:
 
 ```sh
-cp conduit.example.yaml conduit.yaml
+conduit --init --config conduit.yaml
+conduit --config conduit.yaml
+```
+
+`--init` creates a private file and refuses to overwrite one. It is available
+from the published wheel as well as a source checkout.
+
+## Run a local demo downstream
+
+For a complete first run, install the official SDK and save this as
+`demo_server.py` in a separate working directory:
+
+```sh
+python -m pip install mcp
+```
+
+```python
+import asyncio
+
+from mcp.server.mcpserver import MCPServer
+
+server = MCPServer("demo")
+
+
+@server.tool()
+def hello(name: str) -> dict[str, str]:
+    return {"message": f"hello, {name}"}
+
+
+if __name__ == "__main__":
+    asyncio.run(server.run_streamable_http_async(port=9000, json_response=True, stateless_http=True))
+```
+
+Start it in one terminal:
+
+```sh
+python demo_server.py
+```
+
+Wait until it prints the local URL before starting Conduit in another terminal.
+
+In `conduit.yaml`, replace the generated downstream entry with:
+
+```yaml
+downstreams:
+  - id: demo
+    url: http://127.0.0.1:9000/mcp
+    headers: {}
+policy:
+  allow: ["demo.*"]
+  deny: []
+```
+
+Then start Conduit in a second terminal:
+
+```sh
 conduit --config conduit.yaml
 ```
 
@@ -44,3 +100,22 @@ and `_meta` protocol metadata.
 Conduit publishes tools as `<downstream-id>.<tool-name>`, such as
 `github.search_code`; those public names are policy-filtered and do not need to
 be parsed by a client.
+
+With the official SDK installed, run this in a third terminal to verify the
+complete path:
+
+```python
+import asyncio
+from mcp.client.client import Client
+
+
+async def main() -> None:
+    async with Client("http://127.0.0.1:8080/mcp") as client:
+        tools = await client.list_tools()
+        print([tool.name for tool in tools.tools])  # ['demo.hello']
+        result = await client.call_tool("demo.hello", {"name": "Conduit"})
+        print(result.content[0].text)
+
+
+asyncio.run(main())
+```

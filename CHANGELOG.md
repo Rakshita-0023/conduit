@@ -4,7 +4,7 @@ All notable changes are documented here. Releases use semantic Git tags and
 [Conventional Commits](https://www.conventionalcommits.org/) to classify
 release impact while Conduit remains in the `0.x` series.
 
-## [0.2.0] - Unreleased
+## [0.2.0] - 2026-08-26
 
 ### Changed
 
