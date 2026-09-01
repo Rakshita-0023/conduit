@@ -30,6 +30,7 @@ test = [
   "pytest>=9,<10",
   "pytest-asyncio>=0.23,<2",
   "pytest-cov>=5,<8",
+  "hypothesis>=6,<7",
   "mypy>=1.11,<3",
   "ruff>=0.6,<1",
   "types-PyYAML>=6.0",
