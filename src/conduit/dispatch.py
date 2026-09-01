@@ -105,7 +105,16 @@ class Dispatcher:
             raise GatewayError(AUDIT_UNAVAILABLE, "audit unavailable")
         if not self._health.snapshot()["ready"]:
             raise GatewayError(TOOL_UNAVAILABLE, "tool unavailable")
-        prepared = await self._prepare_and_authorize(call_id, public_name, arguments, request_headers)
+        # Authorization itself is intentionally before any network dispatch.
+        # A shutdown can cancel a slow durable write at this point, before a
+        # route is available to terminally audit.  Keep that distinct from a
+        # cancellation after the downstream request has begun.
+        prepared: PreparedRoute | None = None
+        try:
+            prepared = await self._prepare_and_authorize(call_id, public_name, arguments, request_headers)
+        except asyncio.CancelledError:
+            raise GatewayError(TOOL_DISPATCH_FAILED, "tool dispatch failed") from None
+        assert prepared is not None
         downstream = self._servers.get(prepared.route.server_id)
         if downstream is None:
             await self._terminal(call_id, prepared, "tool_call_downstream_error", "missing_server", 0)
@@ -162,7 +171,8 @@ class Dispatcher:
                 raise GatewayError(TOOL_OUTCOME_UNKNOWN, "tool outcome unknown")
             await self._terminal(call_id, prepared, "tool_call_downstream_error", "cancelled_before_dispatch", _ms(begin))
             raise GatewayError(TOOL_DISPATCH_FAILED, "tool dispatch failed")
-        except (httpx.HTTPError, ResponseTooLarge, TimeoutError, RuntimeError):
+        except (httpx.HTTPError, ResponseTooLarge, TimeoutError, RuntimeError) as exc:
+            session_id = getattr(exc, "conduit_session_id", session_id)
             if started:
                 await self._terminal(call_id, prepared, "tool_call_unknown_after_dispatch", "unknown", _ms(begin))
                 raise GatewayError(TOOL_OUTCOME_UNKNOWN, "tool outcome unknown")
