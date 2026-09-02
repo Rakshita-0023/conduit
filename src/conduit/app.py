@@ -13,6 +13,7 @@ from starlette.routing import Route
 
 from .audit import AuditLog
 from .catalog import CatalogError, refresh_catalog
+from .compatibility import CompatibilitySessions
 from .config import Config
 from .dispatch import Dispatcher
 from .errors import ResponseTooLarge
@@ -33,6 +34,7 @@ class Runtime:
         self.audit = AuditLog(config.audit.path)
         self.transport = DownstreamTransport(config.limits.tool_call_timeout_seconds)
         self.dispatcher = Dispatcher(config, self.registry, self.audit, self.health, self.transport, build_version)
+        self.compatibility_sessions = CompatibilitySessions()
         self._tasks: list[asyncio.Task[None]] = []
 
     async def start(self) -> None:
@@ -88,7 +90,7 @@ def create_app(config: Config, *, build_version: str = "dev") -> Starlette:
         routes=[
             Route("/healthz", healthz(runtime.health), methods=["GET"]),
             Route("/status", status(runtime.health), methods=["GET"]),
-            Route("/mcp", mcp(runtime, build_version), methods=["POST"]),
+            Route("/mcp", mcp(runtime, build_version), methods=["GET", "POST", "DELETE"]),
         ],
         lifespan=lifespan,
     )
