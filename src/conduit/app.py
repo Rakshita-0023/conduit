@@ -16,7 +16,7 @@ from .catalog import CatalogError, refresh_catalog
 from .compatibility import CompatibilitySessions
 from .config import Config
 from .dispatch import Dispatcher
-from .errors import ResponseTooLarge
+from .errors import ResponseTooLarge, UnsupportedResponse
 from .health import HealthState
 from .ingress import healthz, mcp, status
 from .policy import Policy
@@ -62,7 +62,7 @@ class Runtime:
                 tools = await refresh_catalog(self.transport, downstream, self.config.limits, secrets.token_urlsafe(12))
             except asyncio.CancelledError:
                 raise
-            except (CatalogError, ResponseTooLarge, ValueError, OSError, TimeoutError, httpx.HTTPError):
+            except (CatalogError, ResponseTooLarge, UnsupportedResponse, ValueError, OSError, TimeoutError, httpx.HTTPError):
                 snapshot = await self.registry.remove(server_id)
                 self.health.set_catalog(server_id, "degraded", 0, "catalog refresh failed")
                 self.health.set_aggregate(snapshot)

@@ -55,9 +55,27 @@ class _StatefulDownstream:
                 owner.requests.append(("POST", headers, payload))
                 method = payload["method"]
                 if method == "server/discover":
+                    if owner.mode == "catalog_hanging_sse":
+                        self.send_response(200)
+                        self.send_header("Content-Type", "text/event-stream")
+                        self.end_headers()
+                        self.wfile.write(b": keepalive\n\n")
+                        self.wfile.flush()
+                        owner.delay_started.set()
+                        assert owner.release_delay.wait(timeout=5)
+                        return
+                    if owner.mode == "catalog_sse":
+                        self._sse(payload["id"], {"supportedVersions": [MCP_PROTOCOL_VERSION]})
+                        return
+                    if owner.mode == "catalog_bad_sse":
+                        self._stream(b"event: progress\ndata: not-json\n\n")
+                        return
                     self._json(payload["id"], {"supportedVersions": [MCP_PROTOCOL_VERSION]})
                     return
                 if method == "tools/list":
+                    if owner.mode == "catalog_sse":
+                        self._sse(payload["id"], {"tools": [{"name": "work", "inputSchema": {"type": "object"}}]})
+                        return
                     self._json(payload["id"], {"tools": [{"name": "work", "inputSchema": {"type": "object"}}]})
                     return
                 assert method == "tools/call"
@@ -70,6 +88,9 @@ class _StatefulDownstream:
                 if owner.mode == "delay":
                     owner.delay_started.set()
                     assert owner.release_delay.wait(timeout=5)
+                if owner.mode == "terminal_sse":
+                    self._sse(payload["id"], {"content": [], "structuredContent": {"server": owner.name, "session": session}}, session=session)
+                    return
                 if owner.mode in {"sse", "malformed_sse"}:
                     body = b"event: message\ndata: {not-json}\n\n" if owner.mode == "malformed_sse" else b"event: message\ndata: progress\n\n"
                     self.send_response(200)
@@ -106,6 +127,19 @@ class _StatefulDownstream:
                 body = json.dumps({"jsonrpc": "2.0", "id": request_id, "result": result}).encode()
                 self.send_response(200)
                 self.send_header("Content-Type", "application/json")
+                if session is not None:
+                    self.send_header("Mcp-Session-Id", session)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def _sse(self, request_id: str, result: dict[str, Any], *, session: str | None = None) -> None:
+                self._stream(b": catalog comment\r\n\r\nevent: message\r\ndata: " + json.dumps({"jsonrpc": "2.0", "id": request_id, "result": result}).encode() + b"\r\n\r\n", session=session)
+
+            def _stream(self, body: bytes, *, session: str | None = None) -> None:
+                assert "application/json" in self.headers.get("Accept", "") and "text/event-stream" in self.headers.get("Accept", "")
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
                 if session is not None:
                     self.send_header("Mcp-Session-Id", session)
                 self.send_header("Content-Length", str(len(body)))
@@ -220,6 +254,68 @@ def test_sessions_are_invocation_owned_isolated_and_recover_after_downstream_res
                 calls = [item for item in server.requests if item[2]["method"] == "tools/call"]
                 assert all("mcp-session-id" not in {key.lower() for key in headers} for _, headers, _ in calls)
             assert client.get("/healthz").json()["ready"] is True
+
+
+def test_sse_framed_catalog_refresh_is_healthy_and_malformed_sse_degrades_only_its_server(tmp_path: Path) -> None:
+    with _servers() as (a, b):
+        a.mode = "catalog_sse"
+        with TestClient(create_app(_config(tmp_path, a, b), build_version="test")) as client:
+            _wait_ready(client)
+            listed = client.post("/mcp", headers=_headers("tools/list"), json=_body("tools/list", 1))
+            assert [tool["name"] for tool in listed.json()["result"]["tools"]] == ["alpha.work", "bravo.work"]
+            assert next(item for item in client.get("/status").json()["downstreams"] if item["id"] == "alpha")["state"] == "healthy"
+
+            a.mode = "catalog_bad_sse"
+            deadline = time.monotonic() + 3
+            while time.monotonic() < deadline:
+                state = client.get("/status").json()
+                if next(item for item in state["downstreams"] if item["id"] == "alpha")["state"] == "degraded":
+                    break
+                time.sleep(0.02)
+            assert next(item for item in state["downstreams"] if item["id"] == "alpha")["state"] == "degraded"
+            assert next(item for item in state["downstreams"] if item["id"] == "bravo")["state"] == "healthy"
+            assert client.get("/healthz").json()["ready"] is True
+
+
+def test_keepalive_only_catalog_sse_times_out_degrades_and_recovers(tmp_path: Path) -> None:
+    with _servers() as (a, b):
+        a.mode = "catalog_hanging_sse"
+        with TestClient(create_app(_config(tmp_path, a, b), build_version="test")) as client:
+            _wait_ready(client)
+            assert a.delay_started.wait(timeout=2)
+            deadline = time.monotonic() + 3
+            while time.monotonic() < deadline:
+                status = client.get("/status").json()
+                if next(item for item in status["downstreams"] if item["id"] == "alpha")["state"] == "degraded":
+                    break
+                time.sleep(0.02)
+            else:
+                pytest.fail("keepalive-only SSE catalog did not time out and degrade")
+            assert next(item for item in status["downstreams"] if item["id"] == "bravo")["state"] == "healthy"
+
+            a.release_delay.set()
+            a.mode = "catalog_sse"
+            deadline = time.monotonic() + 3
+            while time.monotonic() < deadline:
+                status = client.get("/status").json()
+                if next(item for item in status["downstreams"] if item["id"] == "alpha")["state"] == "healthy":
+                    break
+                time.sleep(0.02)
+            else:
+                pytest.fail("downstream did not recover after terminal SSE resumed")
+            assert client.get("/healthz").json()["ready"] is True
+
+
+def test_terminal_sse_tool_result_uses_existing_audit_route_and_session_cleanup(tmp_path: Path) -> None:
+    with _servers() as (a, b):
+        a.mode = "terminal_sse"
+        with TestClient(create_app(_config(tmp_path, a, b), build_version="test")) as client:
+            _wait_ready(client)
+            reply = _call(client, 1, "alpha.work")
+            assert reply.json()["result"]["structuredContent"] == {"server": "alpha", "session": "alpha-session-1"}
+            assert a.cleaned == ["alpha-session-1"]
+            audit = (tmp_path / "audit.jsonl").read_text(encoding="utf-8")
+            assert audit.index("tool_call_authorized") < audit.index("tool_call_completed")
 
 
 @pytest.mark.asyncio

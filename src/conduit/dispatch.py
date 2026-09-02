@@ -162,7 +162,8 @@ class Dispatcher:
                 _validate_result(result)
                 await self._terminal(call_id, prepared, "tool_call_completed", "completed", _ms(begin))
                 return {"result": result}
-        except UnsupportedResponse:
+        except UnsupportedResponse as exc:
+            session_id = getattr(exc, "conduit_session_id", session_id)
             await self._terminal(call_id, prepared, "tool_call_downstream_error", "unsupported_response", _ms(begin))
             raise GatewayError(TOOL_RESPONSE_UNSUPPORTED, "tool response unsupported")
         except asyncio.CancelledError:
