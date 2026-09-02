@@ -446,8 +446,8 @@ before claiming a model-directed Codex call has been independently verified.
 
 ### Final validation and status
 
-The complete post-change suite passed: `python -m pytest --cov` reported **154
-passed** and **87.89%** total coverage. Ruff, strict mypy, pip-audit,
+The complete post-change suite passed: `python -m pytest --cov` reported **155
+passed** and **87.84%** total coverage. Ruff, strict mypy, pip-audit,
 `python -m build`, `twine check dist/*`, strict MkDocs, actionlint, and `git
 diff --check` all passed. A newly created external virtual environment then
 installed only the built `conduit_gateway-0.3.0-py3-none-any.whl`; `conduit

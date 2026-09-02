@@ -55,6 +55,15 @@ class _StatefulDownstream:
                 owner.requests.append(("POST", headers, payload))
                 method = payload["method"]
                 if method == "server/discover":
+                    if owner.mode == "catalog_hanging_sse":
+                        self.send_response(200)
+                        self.send_header("Content-Type", "text/event-stream")
+                        self.end_headers()
+                        self.wfile.write(b": keepalive\n\n")
+                        self.wfile.flush()
+                        owner.delay_started.set()
+                        assert owner.release_delay.wait(timeout=5)
+                        return
                     if owner.mode == "catalog_sse":
                         self._sse(payload["id"], {"supportedVersions": [MCP_PROTOCOL_VERSION]})
                         return
@@ -265,6 +274,35 @@ def test_sse_framed_catalog_refresh_is_healthy_and_malformed_sse_degrades_only_i
                 time.sleep(0.02)
             assert next(item for item in state["downstreams"] if item["id"] == "alpha")["state"] == "degraded"
             assert next(item for item in state["downstreams"] if item["id"] == "bravo")["state"] == "healthy"
+            assert client.get("/healthz").json()["ready"] is True
+
+
+def test_keepalive_only_catalog_sse_times_out_degrades_and_recovers(tmp_path: Path) -> None:
+    with _servers() as (a, b):
+        a.mode = "catalog_hanging_sse"
+        with TestClient(create_app(_config(tmp_path, a, b), build_version="test")) as client:
+            _wait_ready(client)
+            assert a.delay_started.wait(timeout=2)
+            deadline = time.monotonic() + 3
+            while time.monotonic() < deadline:
+                status = client.get("/status").json()
+                if next(item for item in status["downstreams"] if item["id"] == "alpha")["state"] == "degraded":
+                    break
+                time.sleep(0.02)
+            else:
+                pytest.fail("keepalive-only SSE catalog did not time out and degrade")
+            assert next(item for item in status["downstreams"] if item["id"] == "bravo")["state"] == "healthy"
+
+            a.release_delay.set()
+            a.mode = "catalog_sse"
+            deadline = time.monotonic() + 3
+            while time.monotonic() < deadline:
+                status = client.get("/status").json()
+                if next(item for item in status["downstreams"] if item["id"] == "alpha")["state"] == "healthy":
+                    break
+                time.sleep(0.02)
+            else:
+                pytest.fail("downstream did not recover after terminal SSE resumed")
             assert client.get("/healthz").json()["ready"] is True
 
 
