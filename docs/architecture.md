@@ -1,15 +1,12 @@
 # Conduit architecture
 
-Conduit implements a narrow federation path:
+![Conduit architecture](assets/conduit-architecture.svg)
 
-```mermaid
-flowchart LR
-    C[MCP client] --> I[Ingress]
-    I --> R[Immutable registry + policy]
-    R --> A[Durable authorization audit]
-    A --> D[Dispatcher]
-    D --> M[Downstream Streamable HTTP MCP]
-```
+Conduit implements a narrow federation path. Clients connect to Conduit rather
+than directly to each downstream. Protocol normalization, policy, durable
+authorization audit, catalog publication, exact routing, and health controls
+remain in the local control layer; each downstream receives only its
+configured credentials and a bounded transport request.
 
 Ingress accepts MCP 2026-07-28 on the local Streamable HTTP endpoint. It serves `server/discover`, the published aggregate for `tools/list`, and hands `tools/call` to the dispatcher. It does not forward the client request as a general proxy request.
 
