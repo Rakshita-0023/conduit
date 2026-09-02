@@ -57,3 +57,15 @@ release impact while Conduit remains in the `0.x` series.
 
 [0.1.1]: https://github.com/Rakshita-0023/conduit/releases/tag/v0.1.1
 [0.1.0]: https://github.com/Rakshita-0023/conduit/releases/tag/v0.1.0
+
+## 0.3.0
+
+- Add compatibility ingress for standard HTTP MCP clients.
+- Add Claude Code compatibility.
+- Add Codex CLI compatibility.
+- Support 2025-06-18 and 2025-11-25 client session negotiation.
+- Preserve native modern 2026-07-28 behavior.
+- Add SSE session-channel compatibility for clients such as Codex.
+- Validate real Codex model-directed tool calls through multiple downstream MCP servers.
+- Preserve centralized policy, audit, routing, credential isolation, and no-retry guarantees.
+
