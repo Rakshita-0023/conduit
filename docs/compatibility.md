@@ -44,16 +44,29 @@ one-shot downstream dispatch as native modern requests. The adapter supplies
 only the internal `Mcp-Name` correlation header from the validated JSON body;
 a caller-provided conflicting value is rejected.
 
+## Downstream terminal SSE responses
+
+Conduit supports Streamable HTTP downstreams that return either
+`application/json` terminal JSON-RPC responses or a finite
+`text/event-stream` response containing exactly one correlated terminal
+JSON-RPC `message` event. The SSE decoder is incremental and bounded by the
+same catalog or tool-response limit as JSON. It supports LF/CRLF framing,
+comments, chunk boundaries, and multiple `data:` lines joined according to SSE
+framing rules.
+
+This is terminal-response compatibility, not a streaming bridge. Conduit does
+not forward downstream SSE to clients, relay progress/events, accept unrelated
+or multiple terminal messages, reconnect/replay, or retry a `tools/call`. A
+malformed, truncated, mismatched, oversized, progress-style, or indefinite
+stream fails closed. Once a tool call may have reached its downstream, a lost
+or unreadable terminal response remains an uncertain outcome.
+
 Stateful downstream tool calls may return `Mcp-Session-Id`; Conduit performs at
 most one bounded cleanup `DELETE` using that invocation-owned downstream
 session ID. It does not retain or replay that identifier on a later invocation.
 A session advertised before a failed, oversized, or disconnected response is
 still cleaned up where the downstream made that identifier available.
 
-An SSE response, including a progress/event stream, is not a successful
-downstream tool result: Conduit returns its documented unsupported-response
-error and performs no tool-call retry. A malformed, disconnected, or oversized
-body after dispatch has an uncertain outcome and is likewise never retried.
 
 ## Client setup
 

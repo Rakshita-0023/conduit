@@ -391,3 +391,70 @@ authenticated smoke calls; this audit environment could prove their actual
 connections/negotiations but not authorize their model endpoints. The
 compatibility feature warrants a **minor v0.x release** rather than reusing the
 already-published `0.2.2` artifact.
+
+## Terminal downstream SSE compatibility — 2026-09-02
+
+### Root cause and remediation
+
+The downstream transport treated every `text/event-stream` response as an
+unsupported tool response and exposed its raw SSE bytes to catalog parsing.
+GitHub's official MCP endpoint correctly returns finite terminal JSON-RPC
+messages in SSE (`event: message` / `data: ...`) even for modern
+`server/discover`; Conduit therefore degraded a valid downstream as a catalog
+failure.
+
+`transport.py` now performs content-type dispatch: ordinary
+`application/json` retains the existing bounded decoder, while
+`text/event-stream` uses a bounded incremental terminal-SSE decoder. It accepts
+only one complete correlated JSON-RPC response, consumes the finite stream to
+detect a second response, and returns the decoded JSON bytes to the unchanged
+catalog/dispatcher path. CRLF/LF, comments, chunk boundaries, and multi-line
+data framing are supported. Progress/unknown events, malformed or non-JSON
+data, truncated streams, unmatched IDs, multiple terminal messages, wrong
+content type, and size overflow fail closed; a post-dispatch transport loss or
+overflow remains the existing unknown tool outcome with no retry.
+
+### Deterministic and remote validation
+
+New transport and real-local-HTTP tests cover valid JSON/SSE catalog and tool
+responses, arbitrary chunk boundaries, LF/CRLF, comments, data-line joining,
+wrong IDs/types, unsupported events, malformed/non-JSON/truncated/no-terminal
+streams, multiple terminal messages, unexpected content type, limits, iterator
+closure on cancellation, session cleanup, degraded-peer isolation, and recovery.
+
+Using a local credential supplied only from `gh auth token` (never printed,
+committed, or retained in repository configuration), the live GitHub endpoint
+`https://api.githubcopilot.com/mcp/` returned `200 text/event-stream` to the
+modern discovery probe. Through Conduit, `githubremote` became **healthy** with
+**14** discovered tools. `tools/list` exposed all 14 namespaced tools; actual
+catalog inspection selected `githubremote.get_latest_release` with required
+`owner`/`repo` header-annotated arguments. A read-only `cli/cli` call completed
+through Conduit with HTTP 200, terminal result, and audit authorization before
+completion.
+
+The isolated Codex CLI remote-MCP configuration connected to Conduit but its
+model execution exited 1 before tool selection because the environment has no
+OpenAI/Codex authentication (`401 Unauthorized`). This is an external
+credential limitation; the same read-only call succeeded directly through
+Conduit and GitHub with the real discovered schema. An authenticated Codex
+account must rerun the documented `githubremote.get_latest_release` smoke call
+before claiming a model-directed Codex call has been independently verified.
+
+### Final validation and status
+
+The complete post-change suite passed: `python -m pytest --cov` reported **153
+passed** and **87.89%** total coverage. Ruff, strict mypy, pip-audit,
+`python -m build`, `twine check dist/*`, strict MkDocs, actionlint, and `git
+diff --check` all passed. A newly created external virtual environment then
+installed only the built `conduit_gateway-0.3.0-py3-none-any.whl`; `conduit
+--init --config quickstart.yaml` succeeded, and a separate local HTTP server
+which requires both MCP `Accept` media types proved terminal-SSE
+discovery/list/call plus audit ordering through the installed wheel.
+
+**Updated assessment: 97% complete, 9.6/10 readiness for the intended local
+gateway scope.** No known Conduit runtime blocker remains for finite terminal
+SSE downstreams. The outstanding release-evidence limitation is the
+environment's unauthenticated Codex model account, not gateway behavior: an
+authenticated Codex smoke call against the documented GitHub configuration is
+still required before representing that specific end-to-end client proof as
+complete. This interoperability repair warrants a **v0.3.1** patch release.

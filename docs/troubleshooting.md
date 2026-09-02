@@ -27,5 +27,8 @@ accepted; `null`, non-loopback, and malformed origins are rejected.
 
 ## Downstream progress/SSE response
 
-Request-scoped downstream SSE/progress is intentionally unsupported in v0.2.
-Conduit rejects it conservatively and cleans up any invocation-owned session.
+Conduit accepts only a finite SSE response that reduces to one correlated
+terminal JSON-RPC message. It does not forward downstream events or support
+general progress streaming. A malformed, progress-style, multiple, truncated,
+or oversized SSE response is rejected conservatively and any invocation-owned
+session is cleaned up.

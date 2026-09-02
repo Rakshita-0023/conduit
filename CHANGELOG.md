@@ -19,6 +19,9 @@ release impact while Conduit remains in the `0.x` series.
 - Standard-client session GET requests now receive the required
   `text/event-stream` content type without exposing downstream SSE/progress as
   tool output.
+- Downstream Streamable HTTP servers may now return one bounded, correlated
+  terminal JSON-RPC response framed as `text/event-stream`; progress streams,
+  event fanout, and tool-call replay remain unsupported.
 
 ## [0.2.0] - 2026-08-26
 
@@ -68,4 +71,3 @@ release impact while Conduit remains in the `0.x` series.
 - Add SSE session-channel compatibility for clients such as Codex.
 - Validate real Codex model-directed tool calls through multiple downstream MCP servers.
 - Preserve centralized policy, audit, routing, credential isolation, and no-retry guarantees.
-
