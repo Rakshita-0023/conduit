@@ -1,0 +1,33 @@
+flowchart TB
+  subgraph clients["MCP clients"]
+    codex["Codex"]
+    claude["Claude Code"]
+    inspector["MCP Inspector"]
+    other["Other MCP clients"]
+  end
+
+  clients --> ingress["Conduit ingress"]
+  ingress --> normalize["Compatibility & protocol normalization"]
+
+  subgraph conduit["Conduit control layer"]
+    policy["Policy\nallow · deny · default-deny"]
+    audit["Durable audit\nbefore dispatch"]
+    catalog["Catalog\ndeterministic tool namespace"]
+    routing["Exact routing\nstored tool identity"]
+    health["Health\ndegraded · recovery"]
+  end
+
+  normalize --> policy
+  policy --> audit --> catalog --> routing
+  health --- catalog
+  routing --> transport["Downstream transport compatibility\nJSON or terminal SSE"]
+
+  subgraph downstreams["Downstream MCP servers"]
+    github["GitHub MCP"]
+    slack["Slack MCP"]
+    database["Database MCP"]
+    custom["Custom MCP"]
+  end
+
+  transport --> github & slack & database & custom
+  credentials["Per-server credentials\nnever forwarded from clients"] -. scoped .-> transport

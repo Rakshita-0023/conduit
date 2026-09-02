@@ -1,0 +1,26 @@
+# Safe, local-only configuration used by docs/demo/run-demo.sh.
+listener:
+  address: 127.0.0.1:8080
+  allowed_origins: []
+audit:
+  path: ./docs/demo/conduit-demo-audit.jsonl
+policy:
+  allow: ["calc.*", "admin.*"]
+  deny: ["admin.reset"]
+limits:
+  max_pages_per_downstream: 4
+  max_tools_per_downstream: 16
+  max_downstream_catalog_bytes: 65536
+  max_aggregate_tools: 16
+  max_aggregate_response_bytes: 65536
+  max_tool_response_bytes: 65536
+  catalog_refresh_interval: 60s
+  request_timeout: 2s
+  tool_call_timeout: 2s
+downstreams:
+  - id: calc
+    url: http://127.0.0.1:9000/mcp
+    headers: {}
+  - id: admin
+    url: http://127.0.0.1:9001/mcp
+    headers: {}
