@@ -221,5 +221,7 @@ def test_body_at_ingress_bound_is_admitted(client: TestClient) -> None:
 def test_not_found_and_method_restriction_match_http_boundary(client: TestClient) -> None:
     assert client.get("/absent").status_code == 404
     response = client.get("/mcp")
-    assert response.status_code == 405
-    assert response.headers["allow"] == "POST"
+    # GET is reserved for a negotiated standard Streamable HTTP session.  It
+    # must not become an unauthenticated event stream.
+    assert response.status_code == 400
+    assert response.text == "invalid MCP session\n"

@@ -6,8 +6,9 @@ Conduit is a deterministic, local-first MCP gateway that federates tools from
 multiple Streamable HTTP servers behind one policy-enforced and auditable
 endpoint.
 
-It presents one MCP 2026-07-28 endpoint, publishes stable names such as
-`github.search_code`, and routes an authorised call only through its stored
+It natively presents the MCP 2026-07-28 profile, adapts current standard
+session-based Streamable HTTP clients at ingress, publishes stable names such
+as `github.search_code`, and routes an authorised call only through its stored
 downstream route. It is deliberately not a general-purpose MCP proxy.
 
 ## Install
@@ -76,10 +77,12 @@ downstreams:
 ## Scope and safety model
 
 Conduit supports `server/discover`, deterministic policy-filtered `tools/list`,
-and terminal JSON `tools/call` over MCP **2026-07-28**. Downstreams are
-Streamable HTTP only. It has no automatic tool-call retries, legacy fallback,
-stdio, OAuth broker, identity system, database, dashboard, or SSE/progress
-bridge.
+and terminal JSON `tools/call` over MCP **2026-07-28**, plus a narrowly scoped
+ingress adapter for standard session-based clients using `2025-06-18` or
+`2025-11-25`. Downstreams are Streamable HTTP only. It has no automatic
+tool-call retries, stdio, OAuth broker, identity system, database, dashboard,
+or downstream SSE/progress bridge. See the [compatibility matrix](docs/compatibility.md)
+for Claude Code, Codex, and Inspector setup.
 
 Every public tool has an explicit immutable route. Policy is deny-wins, then
 allow, then default-deny. A durable `tool_call_authorized` audit entry is

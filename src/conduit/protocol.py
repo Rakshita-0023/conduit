@@ -8,6 +8,11 @@ from dataclasses import dataclass
 from typing import Any, Mapping
 
 MCP_PROTOCOL_VERSION = "2026-07-28"
+# These are the session-based Streamable HTTP versions observed in currently
+# supported MCP clients.  They are deliberately kept separate from Conduit's
+# native 2026 profile: compatibility requests are normalized at ingress and
+# never change the protocol used between Conduit and a downstream.
+COMPAT_PROTOCOL_VERSIONS = frozenset({"2025-06-18", "2025-11-25"})
 MAX_INGRESS_BODY_BYTES = 1 << 20
 _NUMBER_RE = re.compile(r"-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?$")
 
@@ -21,6 +26,15 @@ class MCPRequest:
     method: str
     params: Mapping[str, Any]
     raw_id: str
+
+
+@dataclass(frozen=True)
+class CompatibilityRequest:
+    """A standard session-based MCP request accepted by the ingress adapter."""
+
+    method: str
+    params: Mapping[str, Any]
+    raw_id: str | None
 
 
 def validate_mcp_request(body: bytes, headers: Mapping[str, str]) -> MCPRequest:
@@ -54,6 +68,47 @@ def validate_mcp_request(body: bytes, headers: Mapping[str, str]) -> MCPRequest:
     if headers.get("mcp-method") != method:
         raise ProtocolError("Mcp-Method must match JSON-RPC method")
     return MCPRequest(method=method, params=params, raw_id=raw_id)
+
+
+def validate_compatibility_request(body: bytes) -> CompatibilityRequest:
+    """Validate common JSON-RPC framing without weakening the native profile.
+
+    Standard Streamable HTTP clients negotiate their protocol in ``initialize``
+    and a session header, rather than in Conduit's native metadata/header pair.
+    This only validates framing; ingress applies method and session rules.
+    """
+
+    if len(body) > MAX_INGRESS_BODY_BYTES:
+        raise ProtocolError("request body is too large")
+    try:
+        text = body.decode("utf-8")
+        value = _strict_loads(text)
+        raw_id = _raw_top_level_id(text)
+    except (UnicodeDecodeError, ValueError, json.JSONDecodeError) as exc:
+        raise ProtocolError("invalid JSON") from exc
+    if not isinstance(value, dict):
+        raise ProtocolError("JSON-RPC request must be an object")
+    if value.get("jsonrpc") != "2.0":
+        raise ProtocolError("jsonrpc must be 2.0")
+    method = value.get("method")
+    if not isinstance(method, str) or not method:
+        raise ProtocolError("method must be a non-empty string")
+    if raw_id is not None and not _valid_id(raw_id):
+        raise ProtocolError("request ID must be a JSON string or number")
+    params = value.get("params", {})
+    if not isinstance(params, dict):
+        raise ProtocolError("params must be an object")
+    return CompatibilityRequest(method=method, params=params, raw_id=raw_id)
+
+
+def compatibility_initialize_result(build_version: str, protocol_version: str) -> dict[str, Any]:
+    """Return the standard MCP initialize result for a compatible client."""
+
+    return {
+        "protocolVersion": protocol_version,
+        "capabilities": {"tools": {"listChanged": False}},
+        "serverInfo": {"name": "conduit", "version": build_version},
+    }
 
 
 def json_rpc_error(raw_id: str, code: int, message: str, data: object | None = None) -> bytes:

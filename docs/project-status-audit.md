@@ -286,3 +286,108 @@ That is normal release bookkeeping rather than a gateway blocker. Future scope
 work remains optional: public aggregate pagination, durable session pooling,
 SSE/progress support, automatic audit-destination recovery, and CI execution of
 the clean-wheel SDK harness.
+
+## Client interoperability remediation — 2026-09-02
+
+### Evidence captured before implementation
+
+A disposable HTTP recorder outside the checkout captured installed clients
+before the ingress change. This was intentionally wire-level evidence rather
+than an assumption that all MCP clients use Conduit's native profile.
+
+| Client | Observed sequence | Consequence for pre-change Conduit |
+| --- | --- | --- |
+| MCP Inspector 2.4.0 default | `POST initialize` with `params.protocolVersion: "2025-11-25"`, no `Mcp-Method` or native `_meta`; then `notifications/initialized`, `Mcp-Session-Id`, `GET /mcp`, and `tools/list`. | Rejected as `400 invalid MCP request`. |
+| Codex CLI 0.149.1 | Initial GET/OAuth discovery probes, then `POST initialize` with `protocolVersion: "2025-06-18"`; subsequent notification, session GET, and `tools/list` with a session header. | Rejected as `400 invalid MCP request`. |
+| MCP Inspector forced modern | Native `server/discover` / `tools/list` / `tools/call` `2026-07-28` profile. | Already passed and was retained unchanged. |
+| Claude Code 2.1.236 | `claude mcp add --transport http` records `type: http`; local-scope `claude mcp get` performs an HTTP health connection and reported `Status: Connected`. | Project-scope connections await Claude approval; a model tool call requires Claude authentication. |
+
+The recorder captured relevant method, request JSON, `Accept`, content type,
+protocol, session, and user-agent headers. Codex also probed OAuth discovery
+paths before initialization; Conduit continues to return no OAuth metadata,
+which is correct for its documented no-OAuth-broker scope.
+
+### Fix and safety boundary
+
+`protocol.py` now has a framing-only standard request validator for the two
+observed negotiated versions; `compatibility.py` owns opaque public client
+session IDs; and `ingress.py` adapts only `initialize`,
+`notifications/initialized`, `tools/list`, and `tools/call`. The native modern
+validator remains first and unchanged. A malformed request explicitly marked
+as modern cannot fall through to compatibility.
+
+The standard adapter requires an opaque, version-bound `Mcp-Session-Id` after
+initialization, provides the session GET endpoint with a terminal comment-only
+SSE content type for clients that establish an event channel, and deletes the
+session on `DELETE /mcp`. It never forwards that client session downstream. It
+normalizes only the internal `Mcp-Name` correlation header from the verified
+body; all policy, safe-name checks, parameter-header validation, durable audit
+write, exact route selection, credential isolation, timeout, and no-retry
+behavior still run in the existing dispatcher.
+
+The first implementation returned `204` for the standard session GET. A real
+Codex connector reported `Unexpected content type: None`; the fixed endpoint
+returns `text/event-stream` with a comment and no event/tool payload. The
+second real Codex run no longer produced that MCP transport error. This is a
+real interoperability bug fixed by the adapter, not a relaxation of
+downstream SSE/progress policy.
+
+### Regression and real-client validation
+
+`tests/test_e2e.py` now exercises both negotiated versions through actual
+`/mcp` requests against two independent HTTP downstreams. It proves standard
+initialize/notification/session GET/list/call/delete, raw numeric request-ID
+fidelity, x-mcp-header enforcement, audit-before-side-effect, denial,
+conflicting routing-header rejection, session version binding, and session
+cleanup. Existing native modern tests remain unchanged.
+
+Real Inspector 2.4.0 validation against a live Conduit process passed both
+default and forced-modern `tools/list` and `tools/call`; the latter returned
+the downstream echo payload. `claude mcp get conduit` reported `Connected` for
+the required HTTP add command. Codex configured the remote MCP URL and opened
+the compatible MCP session without a transport error.
+
+The environment used for this audit has no Claude login and its isolated Codex
+CLI home has no OpenAI credential. Consequently the final model-directed
+Claude Code and Codex `tools/call` commands stop at their vendors' respective
+authentication gates before either model can choose a tool. This is an
+environment-only validation limitation, not evidence of a Conduit request
+failure; it is explicitly documented rather than disguised as a passing call.
+
+### Updated assessment
+
+The compatibility adapter removes the known `400 invalid MCP request` blocker
+for the actual negotiated Inspector and Codex request shapes, and Claude Code's
+real HTTP initialize/list sequence now connects. The remaining release-validation action is
+to rerun the documented Claude/Codex model tool-call smoke tests in an
+authenticated account before marketing those two calls as independently
+verified. This is a release confidence requirement, not a known gateway
+runtime defect.
+
+### Final commands and recalculated status
+
+After the compatibility fix, the local quality suite completed with **141
+passed** tests and **87.36%** total coverage. Ruff, strict mypy, pip-audit,
+strict MkDocs, actionlint, `python -m build`, Twine, and `git diff --check`
+all passed. The newly built wheel and sdist explicitly contained
+`conduit/compatibility.py` and the packaged quick-start template.
+
+A fresh external virtual environment installed only the built
+`conduit_gateway-0.2.2-py3-none-any.whl` and `mcp==2.1.1`; it ran
+`conduit --init --config quickstart.yaml` successfully at mode 0600. Its two
+independent official SDK downstream servers (`github` and `calc`) were then
+exercised with real Inspector default and forced-modern clients. Default
+Inspector listed `github.add`, `github.echo`, `github.search`, `calc.square`,
+and `calc.search`, hid denied `github.multiply`, and called `github.add` and
+`calc.square` correctly. Forced-modern Inspector called `calc.search` through
+the unchanged native path. The audit log contained all three authorizations
+before dispatch, and captured downstream headers showed the configured
+credential remained scoped to its owning server.
+
+**Completion: 96%. Readiness: 9.5/10.** There is no known Conduit runtime
+blocker for its intended local-first HTTP scope. Before a release announcement
+claims full Claude/Codex end-to-end tool-call proof, run the documented
+authenticated smoke calls; this audit environment could prove their actual
+connections/negotiations but not authorize their model endpoints. The
+compatibility feature warrants a **minor v0.x release** rather than reusing the
+already-published `0.2.2` artifact.
