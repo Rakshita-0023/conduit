@@ -93,9 +93,12 @@ curl -sS http://127.0.0.1:8080/status
 
 ## Discover tools
 
-Use a Streamable HTTP MCP client with protocol version `2026-07-28`. Requests
-must include matching `MCP-Protocol-Version`, `Mcp-Method`, JSON-RPC method,
-and `_meta` protocol metadata.
+Use a Streamable HTTP MCP client. Conduit's native `2026-07-28` profile
+requires matching `MCP-Protocol-Version`, `Mcp-Method`, JSON-RPC method, and
+`_meta` protocol metadata. Current standard clients using negotiated
+`2025-06-18` or `2025-11-25` sessions are adapted safely at ingress; see the
+[compatibility matrix](compatibility.md) for Claude Code, Codex, and Inspector
+commands.
 
 Conduit publishes tools as `<downstream-id>.<tool-name>`, such as
 `github.search_code`; those public names are policy-filtered and do not need to

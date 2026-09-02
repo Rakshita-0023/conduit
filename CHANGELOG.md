@@ -4,6 +4,22 @@ All notable changes are documented here. Releases use semantic Git tags and
 [Conventional Commits](https://www.conventionalcommits.org/) to classify
 release impact while Conduit remains in the `0.x` series.
 
+## Unreleased
+
+### Added
+
+- A strict ingress compatibility adapter for standard session-based Streamable
+  HTTP MCP clients negotiating `2025-06-18` or `2025-11-25`, while retaining
+  Conduit's native `2026-07-28` profile unchanged.
+- Claude Code, Codex CLI, and MCP Inspector setup documentation and
+  compatibility matrix.
+
+### Fixed
+
+- Standard-client session GET requests now receive the required
+  `text/event-stream` content type without exposing downstream SSE/progress as
+  tool output.
+
 ## [0.2.0] - 2026-08-26
 
 ### Changed
