@@ -22,6 +22,10 @@ class AuditLog:
             if target.exists() and stat.S_IMODE(target.stat().st_mode) & 0o077:
                 raise AuditUnavailable("audit file permissions must not grant group or other access")
             self._file = os.fdopen(os.open(target, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600), "a", encoding="utf-8")
+            opened = os.fstat(self._file.fileno())
+            self._path = target
+            self._identity = (opened.st_dev, opened.st_ino)
+            self._verify_target()
         except OSError as exc:
             raise AuditUnavailable(f"open audit: {exc}") from exc
         self._lock = asyncio.Lock()
@@ -38,12 +42,34 @@ class AuditLog:
             payload = dict(event)
             payload.setdefault("timestamp", datetime.now(UTC).isoformat().replace("+00:00", "Z"))
             try:
-                self._file.write(json.dumps(payload, separators=(",", ":"), ensure_ascii=False) + "\n")
+                self._verify_target()
+                record = json.dumps(payload, separators=(",", ":"), ensure_ascii=False) + "\n"
+                written = self._file.write(record)
+                if written != len(record):
+                    raise OSError("short audit write")
                 self._file.flush()
                 os.fsync(self._file.fileno())
             except (OSError, TypeError, ValueError) as exc:
                 self._failed = True
                 raise AuditUnavailable("audit unavailable") from exc
+
+    def _verify_target(self) -> None:
+        """Reject a replaced, unlinked, or permission-weakened audit target.
+
+        An open Unix file descriptor remains writable after its pathname is
+        deleted or replaced.  Continuing to authorize calls in that state
+        would make records unavailable to the configured audit destination
+        after restart, so the gateway must fail closed before dispatch.
+        """
+
+        opened = os.fstat(self._file.fileno())
+        target = self._path.stat()
+        if (opened.st_dev, opened.st_ino) != self._identity or (target.st_dev, target.st_ino) != self._identity:
+            raise OSError("audit destination was replaced")
+        if opened.st_nlink == 0:
+            raise OSError("audit destination was removed")
+        if stat.S_IMODE(target.st_mode) & 0o077:
+            raise OSError("audit file permissions are unsafe")
 
     @property
     def available(self) -> bool:

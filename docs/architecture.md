@@ -21,7 +21,7 @@ Aggregate tool names are deterministic: `<downstream-id>.<downstream-tool-name>`
 
 ## Policy and authorization
 
-Policy allow/deny rules filter public `tools/list` output. For a call, the registry prepares the route, then authorization is committed while verifying that the same aggregate generation and policy still apply. The durable authorization audit record is written inside that linearization boundary. If it cannot be written, no downstream transport starts.
+Policy allow/deny rules filter public `tools/list` output. For a call, the registry prepares the route, then authorization is committed while verifying that the same aggregate generation and policy still apply. The durable authorization audit record is written inside that linearization boundary. If it cannot be written, no downstream transport starts. Authorization requires a complete write, flush, and `fsync` of the configured private audit file. A short write, serialization/flush/fsync error, replaced or removed pathname, or weakened file permissions makes audit unavailable and blocks future calls rather than risking an unaudited side effect. Recovery from that fail-closed state is by restoring the destination and restarting Conduit.
 
 The registry lock is released before network I/O. This makes refresh publication independent of downstream execution while preventing a stale prepared route from being authorized.
 

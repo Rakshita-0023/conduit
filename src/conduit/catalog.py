@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-from .config import DownstreamConfig, LimitsConfig
+from .config import DownstreamConfig, LimitsConfig, valid_downstream_tool_name
 from .transport import MCP_VERSION, DownstreamTransport, parse_jsonrpc_reply
 
 
@@ -47,7 +47,7 @@ async def refresh_catalog(transport: DownstreamTransport, downstream: Downstream
         if reply.status_code < 200 or reply.status_code >= 300 or error is not None or not isinstance(page_tools, list):
             raise CatalogError("downstream tools/list failed")
         for tool in page_tools:
-            if not isinstance(tool, Mapping) or not isinstance(tool.get("name"), str) or not tool["name"] or not isinstance(tool.get("inputSchema"), Mapping):
+            if not isinstance(tool, Mapping) or not valid_downstream_tool_name(tool.get("name")) or not isinstance(tool.get("inputSchema"), Mapping):
                 raise CatalogError("malformed tool definition")
             tools.append(dict(tool))
             if len(tools) > limits.max_tools_per_downstream:

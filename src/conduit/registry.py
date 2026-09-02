@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any, Awaitable, Callable, Mapping
 
-from .config import LimitsConfig
+from .config import LimitsConfig, valid_downstream_tool_name
 from .policy import Policy
 
 STARTING = "starting"
@@ -117,7 +117,7 @@ class Registry:
         for server_id, catalog in self._catalogs.items():
             for original in catalog:
                 name = original.get("name") if isinstance(original, Mapping) else None
-                if not isinstance(name, str) or not name:
+                if not isinstance(name, str) or not valid_downstream_tool_name(name):
                     self._snapshot = Snapshot(generation, UNAVAILABLE, (), MappingProxyType({}), MappingProxyType({}), None)
                     return
                 public_name = f"{server_id}.{name}"

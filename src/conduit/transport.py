@@ -71,13 +71,19 @@ class DownstreamTransport:
         if parameter_headers:
             headers.update(parameter_headers)
         payload = {"jsonrpc": "2.0", "id": request_id, "method": method, "params": params}
+        session_id: str | None = None
         try:
             async with self._client.stream("POST", endpoint, headers=headers, json=payload, timeout=timeout) as response:
                 session_id = response.headers.get("mcp-session-id")
                 content_type = response.headers.get("content-type", "").lower()
                 body = await read_bounded(response, limit)
                 return DownstreamReply(response.status_code, dict(response.headers), body, session_id, content_type.startswith("text/event-stream"))
-        except httpx.HTTPError:
+        except (httpx.HTTPError, ResponseTooLarge) as exc:
+            # A downstream can create a session before its body later proves
+            # malformed, oversized, or disconnected. Preserve that ownership
+            # information for the dispatcher so its finally block can still
+            # send the one bounded cleanup DELETE.
+            setattr(exc, "conduit_session_id", session_id)
             raise
 
     async def cleanup(self, endpoint: str, session_id: str, configured_headers: Mapping[str, str], timeout: float | None) -> None:

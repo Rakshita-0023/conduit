@@ -101,7 +101,7 @@ _LIMIT_KEYS = {
     "tool_call_timeout",
 }
 _DOWNSTREAM_KEYS = {"id", "url", "headers"}
-_RULE_RE = re.compile(r"[^\s]+(?:\.\*)?$")
+_NAME_RE = re.compile(r"[A-Za-z0-9_-]+\Z")
 _DURATION_PART_RE = re.compile(r"(?P<value>[0-9]+(?:\.[0-9]+)?)(?P<unit>ns|us|µs|ms|s|m|h)")
 
 
@@ -186,6 +186,7 @@ def _parse_downstream(value: object, index: int) -> DownstreamConfig:
     raw = _mapping(value, label)
     _known_keys(raw, _DOWNSTREAM_KEYS, label)
     downstream_id = _required_string(raw, "id", label)
+    _validate_downstream_id(downstream_id, label)
     url = _required_string(raw, "url", label)
     _validate_downstream_url(url)
     headers_raw = raw.get("headers", {})
@@ -350,5 +351,27 @@ def _validate_unique_downstream_ids(downstreams: tuple[DownstreamConfig, ...]) -
 
 
 def _validate_rule(rule: str) -> None:
-    if not rule or not _RULE_RE.fullmatch(rule) or "*" in rule[:-2]:
-        raise ConfigError("policy rules must be exact names or a trailing .*")
+    if rule.endswith(".*"):
+        server_id = rule[:-2]
+        if _valid_name(server_id, 64):
+            return
+    elif rule.count(".") == 1:
+        server_id, tool_name = rule.split(".", 1)
+        if _valid_name(server_id, 64) and _valid_name(tool_name, 128):
+            return
+    raise ConfigError("policy rules must be exact names or a trailing .*")
+
+
+def valid_downstream_tool_name(value: object) -> bool:
+    """Whether a raw downstream name can form a safe public MCP header name."""
+
+    return isinstance(value, str) and _valid_name(value, 128)
+
+
+def _validate_downstream_id(value: str, label: str) -> None:
+    if not _valid_name(value, 64):
+        raise ConfigError(f"{label}.id must use 1-64 ASCII letters, digits, hyphens, or underscores")
+
+
+def _valid_name(value: str, maximum: int) -> bool:
+    return bool(value) and len(value) <= maximum and _NAME_RE.fullmatch(value) is not None

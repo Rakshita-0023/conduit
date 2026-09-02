@@ -195,3 +195,94 @@ Additional remediation tests cover malformed JSON-RPC catalog replies, repeated 
 ### Recalculated status
 
 **Completion: 88%. Readiness: 8.8/10.** Conduit is now suitable for real external users within its documented local-first, terminal-JSON, Streamable-HTTP-only scope. A v0.2.1 release is recommended after the remediation commit is reviewed and CI completes. Remaining work before a broader “complete” claim is non-blocking: stateful-session/live-SSE integration coverage, more shutdown/audit-failure fault injection, aggregate list pagination (if product scope expands), richer policy fuzzing, and automated SBOM/Release Please only if maintainers decide to promise those features.
+
+## Final hardening round — 2026-09-01
+
+This section preserves the earlier audit and remediation record above, then
+records the final targeted hardening work on `test/final-hardening`, based on
+`main` at `91893c0` (`v0.2.1` is already tagged). It covers the three gaps
+called out in the previous audit: stateful downstream/SSE lifecycle behavior,
+audit fault injection, and policy/routing bypass resistance.
+
+### Stateful sessions and SSE
+
+| Previous gap | Tests and result | Bug / fix | Remaining risk |
+| --- | --- | --- | --- |
+| Only a mocked SSE path and one session-cleanup happy path existed. | `tests/test_stateful_streaming_integration.py` drives two independent real HTTP Streamable-HTTP-style downstreams through Conduit's actual `/mcp` endpoint. It verifies fresh invocation-owned session creation, endpoint-scoped cleanup, no A/B token crossover, stateful restart/invalidation safety, 16 concurrent calls, terminal SSE/progress rejection, malformed SSE, mid-body disconnect, stream overflow, recovery, malicious public-name rejection, and runtime shutdown during a delayed call. All passed. | A session ID received in response headers was lost if body reading later raised `ResponseTooLarge` or an HTTP read error, so cleanup was skipped. `transport.py` now attaches the invocation-owned ID to that exception; `dispatch.py` recovers it in the failure path and performs its one cleanup DELETE. | Conduit deliberately does not implement persistent client-owned downstream sessions or arbitrary SSE/progress. A downstream requiring an initialize/session token before every call is outside the documented scope. |
+
+### Audit fault injection
+
+| Previous gap | Tests and result | Bug / fix | Remaining risk |
+| --- | --- | --- | --- |
+| Audit-before-dispatch was demonstrated only on the happy path; short writes, lost paths, flush/fsync and cancellation were untested. | `tests/test_audit_hardening.py` injects unwritable startup, `PermissionError`, `ENOSPC`, `EIO`, deleted target, short write, serialization, flush and `fsync` failures; concurrent successful/failed calls; recovery by restart; and shutdown while authorization is deliberately stalled. It proves failing authorization produces `-32014` and zero downstream side effects, while a downstream side effect sees its authorization record first. All passed. | `AuditLog.append` ignored a short write, and an already-open Unix descriptor stayed writable after its pathname was removed/replaced. Both could falsely authorize a side effect without a durable record at the configured destination. It now checks write length and verifies inode/link/permissions before every record. A cancellation during pre-dispatch authorization could also reference an unbound prepared route; dispatch now returns a safe pre-dispatch failure with no transport start. | Audit intentionally fails closed until Conduit is restarted after the destination is repaired. This is documented operational behavior, not automatic recovery. A process crash between write and fsync remains correctly treated as no confirmed authorization. |
+
+### Policy fuzzing and route identity
+
+| Previous gap | Tests and result | Bug / fix | Remaining risk |
+| --- | --- | --- | --- |
+| Policy tests covered normal exact/wildcard rules only; raw catalog names were merely nonempty. | `tests/test_policy_fuzz.py` includes the requested punctuation, whitespace/control, Unicode/confusable, traversal/injection and long-name corpus plus 600 deterministic Hypothesis examples. It checks deny-wins/default-deny/case semantics, exact namespace routes, duplicate raw names, invalid config patterns, and that an invalid or unknown name cannot prepare or dispatch. All passed. | A raw downstream name with unsafe header characters or extra namespace separators could enter a catalog. Downstream IDs, raw names and exact/wildcard policy rules now share a strict component grammar: ASCII letters/digits/hyphen/underscore; ID 1–64; tool 1–128; exactly one Conduit separator. Catalog and registry validate defensively. | This intentionally rejects unusual MCP tool names rather than attempting Unicode/percent-decoding canonicalization. It is a documented compatibility boundary and avoids policy/routing disagreement. |
+
+### Final validation evidence
+
+Commands were run from this branch after the fixes:
+
+```text
+.venv/bin/python -m pytest --cov
+137 passed, total coverage 87.84%
+
+.venv/bin/python -m ruff check .
+All checks passed
+
+.venv/bin/python -m mypy src
+Success: no issues found in 16 source files
+
+.venv/bin/python -m pip_audit
+No known vulnerabilities found
+
+.venv/bin/python -m build
+.venv/bin/python -m twine check dist/*
+All wheel/sdist checks passed; wheel and sdist contain conduit.example.yaml
+
+.venv/bin/mkdocs build --strict
+Documentation built successfully
+
+actionlint .github/workflows/*.yml
+Passed
+```
+
+The strict MkDocs run emitted Material's upstream MkDocs-2.0 migration notice
+and its existing “project-status-audit.md is not in nav” information message;
+neither is a build failure.
+
+For the artifact-only check, a fresh directory outside the repository created a
+new virtual environment and installed only
+`dist/conduit_gateway-0.2.1-py3-none-any.whl` plus official `mcp==2.1.1`:
+
+```text
+venv/bin/conduit --init --config conduit.yaml  # created mode 0600 file
+venv/bin/python public_e2e.py
+PASS: ready=true, audit_healthy=true, two official SDK Streamable HTTP servers,
+19 policy-visible namespaced tools, audit_records=18, events=51
+```
+
+That end-to-end run used the installed CLI and an official MCP client against
+the real public `/mcp` endpoint. It covered discovery, `tools/list`, all tool
+argument forms, duplicate names, downstream errors, policy deny, audit ordering,
+timeout/no retry, concurrent calls, configured-header isolation, one-downstream
+degrade/recovery, and clean shutdown. It did not import the source checkout or
+use an editable installation.
+
+### Recalculated status
+
+**Completion: 94%. Readiness: 9.4/10.** There are **no known functional
+blockers** before calling Conduit complete for its intended constrained v0.x
+scope: local-first terminal-JSON federation with invocation-owned sessions and
+fail-closed auditing. It is ready to be presented confidently as a public
+project within that scope.
+
+Before publishing another package, bump the project version: `v0.2.1` is
+already an upstream tag, so these changes cannot be released under that version.
+That is normal release bookkeeping rather than a gateway blocker. Future scope
+work remains optional: public aggregate pagination, durable session pooling,
+SSE/progress support, automatic audit-destination recovery, and CI execution of
+the clean-wheel SDK harness.
