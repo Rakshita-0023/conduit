@@ -73,22 +73,27 @@ class DownstreamTransport:
         payload = {"jsonrpc": "2.0", "id": request_id, "method": method, "params": params}
         session_id: str | None = None
         try:
-            async with self._client.stream("POST", endpoint, headers=headers, json=payload, timeout=timeout) as response:
-                session_id = response.headers.get("mcp-session-id")
-                content_type = response.headers.get("content-type", "").split(";", 1)[0].strip().lower()
-                if content_type == "application/json":
-                    body = await read_bounded(response, limit)
-                    sse = False
-                elif content_type == "text/event-stream":
-                    body = await read_terminal_sse(response, request_id, limit)
-                    # The body is now one verified terminal JSON-RPC reply.
-                    # Keep the legacy flag false so core consumers do not need
-                    # a second policy/audit/routing path for SSE transports.
-                    sse = False
-                else:
-                    raise UnsupportedResponse("unsupported downstream content type")
-                return DownstreamReply(response.status_code, dict(response.headers), body, session_id, sse)
-        except (httpx.HTTPError, ResponseTooLarge, UnsupportedResponse) as exc:
+            # HTTPX read timeouts protect idle sockets but intentionally reset
+            # whenever a peer sends bytes.  The outer deadline additionally
+            # bounds a peer that drip-feeds SSE comments without ever sending a
+            # terminal response.
+            async with asyncio.timeout(timeout):
+                async with self._client.stream("POST", endpoint, headers=headers, json=payload, timeout=timeout) as response:
+                    session_id = response.headers.get("mcp-session-id")
+                    content_type = response.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+                    if content_type == "application/json":
+                        body = await read_bounded(response, limit)
+                        sse = False
+                    elif content_type == "text/event-stream":
+                        body = await read_terminal_sse(response, request_id, limit)
+                        # The body is now one verified terminal JSON-RPC reply.
+                        # Keep the legacy flag false so core consumers do not need
+                        # a second policy/audit/routing path for SSE transports.
+                        sse = False
+                    else:
+                        raise UnsupportedResponse("unsupported downstream content type")
+                    return DownstreamReply(response.status_code, dict(response.headers), body, session_id, sse)
+        except (httpx.HTTPError, ResponseTooLarge, UnsupportedResponse, TimeoutError) as exc:
             # A downstream can create a session before its body later proves
             # malformed, oversized, or disconnected. Preserve that ownership
             # information for the dispatcher so its finally block can still

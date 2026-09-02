@@ -412,15 +412,19 @@ catalog/dispatcher path. CRLF/LF, comments, chunk boundaries, and multi-line
 data framing are supported. Progress/unknown events, malformed or non-JSON
 data, truncated streams, unmatched IDs, multiple terminal messages, wrong
 content type, and size overflow fail closed; a post-dispatch transport loss or
-overflow remains the existing unknown tool outcome with no retry.
+overflow remains the existing unknown tool outcome with no retry. A total
+request deadline also closes a peer that drip-feeds SSE keepalives without ever
+producing a terminal response; HTTPX's idle read timeout alone would not prove
+that invariant.
 
 ### Deterministic and remote validation
 
 New transport and real-local-HTTP tests cover valid JSON/SSE catalog and tool
 responses, arbitrary chunk boundaries, LF/CRLF, comments, data-line joining,
 wrong IDs/types, unsupported events, malformed/non-JSON/truncated/no-terminal
-streams, multiple terminal messages, unexpected content type, limits, iterator
-closure on cancellation, session cleanup, degraded-peer isolation, and recovery.
+streams, drip-fed no-terminal streams stopped by the total deadline, multiple
+terminal messages, unexpected content type, limits, iterator closure on
+cancellation, session cleanup, degraded-peer isolation, and recovery.
 
 Using a local credential supplied only from `gh auth token` (never printed,
 committed, or retained in repository configuration), the live GitHub endpoint
@@ -442,7 +446,7 @@ before claiming a model-directed Codex call has been independently verified.
 
 ### Final validation and status
 
-The complete post-change suite passed: `python -m pytest --cov` reported **153
+The complete post-change suite passed: `python -m pytest --cov` reported **154
 passed** and **87.89%** total coverage. Ruff, strict mypy, pip-audit,
 `python -m build`, `twine check dist/*`, strict MkDocs, actionlint, and `git
 diff --check` all passed. A newly created external virtual environment then

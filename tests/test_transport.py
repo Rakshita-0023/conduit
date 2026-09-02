@@ -176,3 +176,19 @@ async def test_cancelling_sse_read_closes_its_iterator_without_replaying() -> No
         await task
     assert stream.closed
     await transport.close()
+
+
+@pytest.mark.asyncio
+async def test_sse_terminal_deadline_rejects_a_drip_stream_without_a_terminal_message() -> None:
+    """A peer cannot hold a catalog refresh forever by sending keepalives."""
+
+    stream = _BlockingChunks()
+
+    async def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, headers={"Content-Type": "text/event-stream"}, stream=stream)
+
+    transport = DownstreamTransport(1, client=httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    with pytest.raises(TimeoutError):
+        await transport.request("https://downstream.invalid/mcp", "tools/list", "id", {}, {}, 1024, timeout=0.01)
+    assert stream.closed
+    await transport.close()
